@@ -8,7 +8,7 @@ type Ticket = {
   status: string;
   created_at: string;
   user_id: string;
-  profiles: { username: string } | null;
+  profiles: { username: string }[];
 };
 
 export default async function SupportPage() {
@@ -52,7 +52,7 @@ export default async function SupportPage() {
               {tickets.map((t) => (
                 <tr key={t.id} className="hover:bg-gray-900/50">
                   <td className="px-4 py-3 font-medium">{t.subject}</td>
-                  <td className="px-4 py-3 text-gray-400">{t.profiles?.username ?? "—"}</td>
+                  <td className="px-4 py-3 text-gray-400">{t.profiles?.[0]?.username ?? "—"}</td>
                   <td className="px-4 py-3">
                     <span className={`text-xs px-2 py-1 rounded-md ${statusColor[t.status] ?? ""}`}>{t.status}</span>
                   </td>

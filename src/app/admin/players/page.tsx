@@ -12,7 +12,7 @@ type Player = {
   referral_code: string;
   risk_score: number;
   created_at: string;
-  wallets: { coin_balance: number; reward_balance: number; withdrawable_balance: number } | null;
+  wallets: { coin_balance: number; reward_balance: number; withdrawable_balance: number }[];
 };
 
 export default async function PlayersPage() {
@@ -64,8 +64,8 @@ export default async function PlayersPage() {
                 <td className="px-4 py-3">
                   <span className={`text-xs px-2 py-1 rounded-md ${statusColor[p.status] ?? ""}`}>{p.status}</span>
                 </td>
-                <td className="px-4 py-3 text-right text-gray-300">{(p.wallets?.coin_balance ?? 0).toLocaleString()}</td>
-                <td className="px-4 py-3 text-right text-gray-300">₦{(p.wallets?.reward_balance ?? 0).toLocaleString()}</td>
+                <td className="px-4 py-3 text-right text-gray-300">{(p.wallets?.[0]?.coin_balance ?? 0).toLocaleString()}</td>
+                <td className="px-4 py-3 text-right text-gray-300">₦{(p.wallets?.[0]?.reward_balance ?? 0).toLocaleString()}</td>
                 <td className="px-4 py-3 text-right">
                   <span className={p.risk_score > 30 ? "text-red-400" : "text-gray-500"}>{p.risk_score}</span>
                 </td>
