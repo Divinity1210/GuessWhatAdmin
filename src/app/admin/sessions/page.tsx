@@ -32,7 +32,7 @@ export default function SessionsPage() {
   const [startsAt, setStartsAt] = useState("");
   const [endsAt, setEndsAt] = useState("");
   const [entryFee, setEntryFee] = useState(100);
-  const [prizePool, setPrizePool] = useState(0);
+  const [prizePool, setPrizePool] = useState(5000);
   const [selectedQuestions, setSelectedQuestions] = useState<string[]>([]);
   const [creating, setCreating] = useState(false);
 
@@ -49,7 +49,9 @@ export default function SessionsPage() {
     setLoading(false);
   }
 
-  useEffect(() => { loadData(); }, []);
+  useEffect(() => {
+    loadData();
+  }, []);
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -77,16 +79,27 @@ export default function SessionsPage() {
       .select("id")
       .single();
 
-    if (error) { alert(error.message); setCreating(false); return; }
+    if (error) {
+      alert(error.message);
+      setCreating(false);
+      return;
+    }
 
     // Link questions
     const { error: sqErr } = await sb.from("session_questions").insert(
-      selectedQuestions.map((qid, i) => ({ session_id: sess.id, question_id: qid, position: i })),
+      selectedQuestions.map((qid, i) => ({
+        session_id: sess.id,
+        question_id: qid,
+        position: i,
+      }))
     );
     if (sqErr) alert(sqErr.message);
 
     setShowCreate(false);
-    setName(""); setStartsAt(""); setEndsAt(""); setSelectedQuestions([]);
+    setName("");
+    setStartsAt("");
+    setEndsAt("");
+    setSelectedQuestions([]);
     setCreating(false);
     loadData();
   };
@@ -97,7 +110,7 @@ export default function SessionsPage() {
   };
 
   const closeSession = async (id: string) => {
-    if (!confirm("Close this session? This will calculate scores and pay prizes.")) return;
+    if (!confirm("Close this session? This will calculate scores and pay out prizes.")) return;
     const { error } = await sb.rpc("close_session", { p_session_id: id });
     if (error) alert(error.message);
     else loadData();
@@ -105,124 +118,287 @@ export default function SessionsPage() {
 
   const filtered = tab === "all" ? sessions : sessions.filter((s) => s.status === tab);
 
-  const statusColor: Record<string, string> = {
-    upcoming: "bg-blue-900 text-blue-300",
-    active: "bg-green-900 text-green-300",
-    closing: "bg-yellow-900 text-yellow-300",
-    completed: "bg-gray-700 text-gray-400",
+  const statusBadgeStyle: Record<string, string> = {
+    upcoming: "bg-sky-500/15 text-sky-300 border-sky-500/30",
+    active: "bg-rose-500/20 text-rose-300 border-rose-500/40 shadow-[0_0_15px_rgba(244,63,94,0.25)] animate-pulse",
+    closing: "bg-amber-500/15 text-amber-300 border-amber-500/30",
+    completed: "bg-slate-500/10 text-slate-400 border-slate-500/20",
   };
 
   return (
-    <div className="space-y-6">
-      <div className="flex items-center justify-between">
+    <div className="space-y-8 max-w-7xl mx-auto">
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold">Sessions</h1>
-          <p className="text-gray-500 mt-1">{sessions.length} total sessions</p>
+          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-violet-500/10 border border-violet-500/20 text-xs font-semibold text-violet-300 mb-2">
+            🎯 Game Operations
+          </div>
+          <h1 className="text-3xl font-extrabold text-white tracking-tight">Game Sessions</h1>
+          <p className="text-slate-400 text-sm mt-1">
+            Build game sessions, attach question rosters, and launch live runs.
+          </p>
         </div>
-        <button onClick={() => setShowCreate(!showCreate)}
-          className="rounded-lg bg-orange-500 px-4 py-2 text-sm font-medium text-white hover:bg-orange-600 transition-colors">
-          {showCreate ? "Cancel" : "🎮 New Session"}
+
+        <button
+          onClick={() => setShowCreate(!showCreate)}
+          className="inline-flex items-center gap-2 px-5 py-3 rounded-2xl bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white font-semibold text-sm shadow-lg shadow-violet-600/20 transition-all duration-200 hover:scale-[1.02]"
+        >
+          <span>{showCreate ? "✕" : "🎮"}</span>
+          <span>{showCreate ? "Close Drawer" : "Create Session"}</span>
         </button>
       </div>
 
-      {/* Create form */}
+      {/* Creation Drawer */}
       {showCreate && (
-        <form onSubmit={handleCreate} className="rounded-xl border border-gray-800 bg-gray-900 p-6 space-y-4">
-          <h2 className="text-lg font-semibold">Create Session</h2>
-          <div className="grid grid-cols-2 gap-4">
+        <form
+          onSubmit={handleCreate}
+          className="wimbf-glass rounded-3xl p-6 md:p-8 space-y-6 border border-violet-500/30 shadow-2xl animate-fade-in"
+        >
+          <div className="flex items-center justify-between border-b border-white/5 pb-4">
             <div>
-              <label className="block text-xs text-gray-500 uppercase mb-1.5">Session Name</label>
-              <input value={name} onChange={(e) => setName(e.target.value)} required
-                className="w-full rounded-lg border border-gray-700 bg-gray-800 px-4 py-2.5 text-sm focus:border-orange-500 focus:outline-none" />
+              <h2 className="text-lg font-bold text-white">Create Game Session</h2>
+              <p className="text-xs text-slate-400">Configure parameters and question roster</p>
             </div>
+            <span className="px-3 py-1 rounded-full bg-violet-500/10 text-violet-400 border border-violet-500/20 text-xs font-semibold">
+              Upcoming Status
+            </span>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
             <div>
-              <label className="block text-xs text-gray-500 uppercase mb-1.5">Entry Fee (coins)</label>
-              <input type="number" value={entryFee} onChange={(e) => setEntryFee(+e.target.value)}
-                className="w-full rounded-lg border border-gray-700 bg-gray-800 px-4 py-2.5 text-sm focus:border-orange-500 focus:outline-none" />
+              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">
+                Session Name
+              </label>
+              <input
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                required
+                className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3.5 text-sm text-white placeholder:text-slate-500 focus:border-violet-500/50 focus:outline-none"
+                placeholder="e.g., Friday Night Trivia Blitz #102"
+              />
             </div>
+
             <div>
-              <label className="block text-xs text-gray-500 uppercase mb-1.5">Starts At</label>
-              <input type="datetime-local" value={startsAt} onChange={(e) => setStartsAt(e.target.value)} required
-                className="w-full rounded-lg border border-gray-700 bg-gray-800 px-4 py-2.5 text-sm focus:border-orange-500 focus:outline-none" />
+              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">
+                Entry Fee (Coins)
+              </label>
+              <input
+                type="number"
+                value={entryFee}
+                onChange={(e) => setEntryFee(+e.target.value)}
+                className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3.5 text-sm text-white focus:border-violet-500/50 focus:outline-none"
+              />
             </div>
+
             <div>
-              <label className="block text-xs text-gray-500 uppercase mb-1.5">Ends At</label>
-              <input type="datetime-local" value={endsAt} onChange={(e) => setEndsAt(e.target.value)} required
-                className="w-full rounded-lg border border-gray-700 bg-gray-800 px-4 py-2.5 text-sm focus:border-orange-500 focus:outline-none" />
+              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">
+                Starts At
+              </label>
+              <input
+                type="datetime-local"
+                value={startsAt}
+                onChange={(e) => setStartsAt(e.target.value)}
+                required
+                className="w-full rounded-2xl border border-white/10 bg-[#0e121b] px-4 py-3.5 text-sm text-white focus:border-violet-500/50 focus:outline-none"
+              />
             </div>
-            <div className="col-span-2">
-              <label className="block text-xs text-gray-500 uppercase mb-1.5">Prize Pool (₦)</label>
-              <input type="number" value={prizePool} onChange={(e) => setPrizePool(+e.target.value)}
-                className="w-full rounded-lg border border-gray-700 bg-gray-800 px-4 py-2.5 text-sm focus:border-orange-500 focus:outline-none" />
+
+            <div>
+              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">
+                Ends At
+              </label>
+              <input
+                type="datetime-local"
+                value={endsAt}
+                onChange={(e) => setEndsAt(e.target.value)}
+                required
+                className="w-full rounded-2xl border border-white/10 bg-[#0e121b] px-4 py-3.5 text-sm text-white focus:border-violet-500/50 focus:outline-none"
+              />
+            </div>
+
+            <div className="md:col-span-2">
+              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">
+                Prize Pool Amount (₦)
+              </label>
+              <input
+                type="number"
+                value={prizePool}
+                onChange={(e) => setPrizePool(+e.target.value)}
+                className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3.5 text-sm font-bold text-amber-400 focus:border-violet-500/50 focus:outline-none"
+              />
             </div>
           </div>
+
           <div>
-            <label className="block text-xs text-gray-500 uppercase mb-1.5">Select Questions ({selectedQuestions.length} selected)</label>
-            <div className="max-h-48 overflow-y-auto space-y-1 border border-gray-700 rounded-lg p-2">
+            <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">
+              Attach Published Questions ({selectedQuestions.length} selected)
+            </label>
+            <div className="max-h-56 overflow-y-auto space-y-2 border border-white/10 rounded-2xl p-3 bg-white/[0.01]">
               {questions.length === 0 ? (
-                <p className="text-xs text-gray-500 p-2">No published questions. Create and publish questions first.</p>
-              ) : questions.map((q) => (
-                <label key={q.id} className="flex items-center gap-2 rounded px-2 py-1.5 hover:bg-gray-800 cursor-pointer">
-                  <input type="checkbox" checked={selectedQuestions.includes(q.id)}
-                    onChange={(e) => setSelectedQuestions(e.target.checked ? [...selectedQuestions, q.id] : selectedQuestions.filter((id) => id !== q.id))}
-                    className="rounded accent-orange-500" />
-                  <span className="text-sm truncate">{q.title}</span>
-                  <span className="text-xs text-gray-600 ml-auto">{q.category}</span>
-                </label>
-              ))}
+                <p className="text-xs text-slate-500 p-2">
+                  No published questions found. Create and publish questions first.
+                </p>
+              ) : (
+                questions.map((q) => {
+                  const isChecked = selectedQuestions.includes(q.id);
+                  return (
+                    <label
+                      key={q.id}
+                      className={`flex items-center gap-3 p-3 rounded-xl border transition-all cursor-pointer ${
+                        isChecked
+                          ? "bg-violet-500/15 border-violet-500/40 text-white"
+                          : "bg-white/[0.02] border-white/5 text-slate-400 hover:bg-white/5"
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={isChecked}
+                        onChange={(e) =>
+                          setSelectedQuestions(
+                            e.target.checked
+                              ? [...selectedQuestions, q.id]
+                              : selectedQuestions.filter((id) => id !== q.id)
+                          )
+                        }
+                        className="size-4 rounded border-white/20 text-violet-500 focus:ring-0 accent-violet-500"
+                      />
+                      <span className="text-sm font-medium flex-1 truncate">{q.title}</span>
+                      <span className="text-xs px-2.5 py-0.5 rounded-full bg-white/5 border border-white/10 text-slate-400">
+                        {q.category}
+                      </span>
+                    </label>
+                  );
+                })
+              )}
             </div>
           </div>
-          <button type="submit" disabled={creating} className="rounded-lg bg-orange-500 px-6 py-2.5 text-sm font-medium text-white hover:bg-orange-600 disabled:opacity-50">
-            {creating ? "Creating..." : "Create Session"}
-          </button>
+
+          <div className="pt-4 border-t border-white/5 flex gap-3">
+            <button
+              type="submit"
+              disabled={creating}
+              className="px-6 py-3 rounded-2xl bg-gradient-to-r from-violet-600 to-indigo-600 text-white font-bold text-sm transition-all disabled:opacity-50"
+            >
+              {creating ? "Creating Session..." : "Save & Create Session"}
+            </button>
+            <button
+              type="button"
+              onClick={() => setShowCreate(false)}
+              className="px-6 py-3 rounded-2xl bg-white/5 text-slate-300 font-semibold text-sm transition-all"
+            >
+              Cancel
+            </button>
+          </div>
         </form>
       )}
 
       {/* Tabs */}
-      <div className="flex gap-2">
+      <div className="wimbf-glass rounded-2xl p-2 inline-flex gap-1">
         {["all", "upcoming", "active", "completed"].map((t) => (
-          <button key={t} onClick={() => setTab(t)}
-            className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
-              tab === t ? "bg-orange-500/15 text-orange-400" : "bg-gray-800 text-gray-400 hover:text-gray-200"
-            }`}>
-            {t.charAt(0).toUpperCase() + t.slice(1)}
+          <button
+            key={t}
+            onClick={() => setTab(t)}
+            className={`px-4 py-2 rounded-xl text-xs font-semibold uppercase tracking-wider transition-all ${
+              tab === t
+                ? "bg-violet-500/20 text-violet-300 border border-violet-500/40 shadow-md shadow-violet-500/10"
+                : "text-slate-400 hover:text-slate-200"
+            }`}
+          >
+            {t}
           </button>
         ))}
       </div>
 
-      {/* Sessions list */}
+      {/* Sessions List */}
       {loading ? (
-        <div className="flex justify-center py-12">
-          <div className="size-6 animate-spin rounded-full border-2 border-orange-400 border-t-transparent" />
+        <div className="flex flex-col items-center justify-center py-20">
+          <div className="size-10 animate-spin rounded-full border-2 border-violet-500 border-t-transparent mb-3" />
+          <p className="text-xs text-slate-400">Loading game sessions...</p>
+        </div>
+      ) : filtered.length === 0 ? (
+        <div className="wimbf-glass rounded-3xl p-12 text-center space-y-3">
+          <span className="text-4xl">🎯</span>
+          <h3 className="text-lg font-bold text-white">No Sessions Found</h3>
+          <p className="text-xs text-slate-400">No sessions match the selected filter category.</p>
         </div>
       ) : (
-        <div className="space-y-3">
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
           {filtered.map((s) => (
-            <div key={s.id} className="rounded-xl border border-gray-800 bg-gray-900 p-5">
-              <div className="flex items-center justify-between">
-                <div>
-                  <h3 className="font-semibold">{s.name}</h3>
-                  <p className="text-xs text-gray-500 mt-1">
-                    {new Date(s.starts_at).toLocaleString()} → {new Date(s.ends_at).toLocaleString()}
-                  </p>
+            <div
+              key={s.id}
+              className="wimbf-glass wimbf-glass-hover rounded-3xl p-6 border border-white/5 space-y-5 flex flex-col justify-between"
+            >
+              <div className="space-y-3">
+                <div className="flex items-start justify-between gap-3">
+                  <h3 className="font-bold text-base text-white leading-snug">{s.name}</h3>
+                  <span
+                    className={`px-3 py-1 rounded-full text-[10px] font-extrabold uppercase tracking-wider border ${
+                      statusBadgeStyle[s.status] ?? "bg-slate-500/10 text-slate-400"
+                    }`}
+                  >
+                    {s.status}
+                  </span>
                 </div>
-                <div className="flex items-center gap-3">
-                  <span className={`text-xs px-2 py-1 rounded-md ${statusColor[s.status] ?? ""}`}>{s.status}</span>
-                  {s.status === "upcoming" && (
-                    <button onClick={() => updateStatus(s.id, "active")} className="text-xs bg-green-600 text-white px-3 py-1.5 rounded-lg hover:bg-green-700">Activate</button>
-                  )}
-                  {s.status === "active" && (
-                    <button onClick={() => closeSession(s.id)} className="text-xs bg-red-600 text-white px-3 py-1.5 rounded-lg hover:bg-red-700">Close & Score</button>
-                  )}
+
+                <div className="text-xs text-slate-400 flex flex-col space-y-1">
+                  <span>
+                    Starts:{" "}
+                    <strong className="text-slate-200">
+                      {new Date(s.starts_at).toLocaleString("en-NG", {
+                        weekday: "short",
+                        month: "short",
+                        day: "numeric",
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })}
+                    </strong>
+                  </span>
+                  <span>
+                    Ends:{" "}
+                    <strong className="text-slate-200">
+                      {new Date(s.ends_at).toLocaleString("en-NG", {
+                        weekday: "short",
+                        month: "short",
+                        day: "numeric",
+                        hour: "2-digit",
+                        minute: "2-digit",
+                      })}
+                    </strong>
+                  </span>
                 </div>
               </div>
-              <div className="flex gap-4 mt-3 text-xs text-gray-400">
-                <span>💰 ₦{s.prize_pool.toLocaleString()}</span>
-                <span>🪙 {s.entry_fee_coins} coins</span>
+
+              <div className="pt-4 border-t border-white/5 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-3 text-xs">
+                  <span className="px-3 py-1.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-300 font-bold">
+                    ₦{s.prize_pool.toLocaleString()}
+                  </span>
+                  <span className="px-3 py-1.5 rounded-xl bg-white/5 border border-white/10 text-slate-300 font-medium">
+                    🪙 {s.entry_fee_coins} coins
+                  </span>
+                </div>
+
+                <div className="flex items-center gap-2">
+                  {s.status === "upcoming" && (
+                    <button
+                      onClick={() => updateStatus(s.id, "active")}
+                      className="px-3.5 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs transition-all shadow-md shadow-emerald-500/20"
+                    >
+                      Activate Now
+                    </button>
+                  )}
+                  {s.status === "active" && (
+                    <button
+                      onClick={() => closeSession(s.id)}
+                      className="px-3.5 py-1.5 rounded-xl bg-rose-500 hover:bg-rose-400 text-white font-bold text-xs transition-all shadow-md shadow-rose-500/20"
+                    >
+                      Close & Score
+                    </button>
+                  )}
+                </div>
               </div>
             </div>
           ))}
-          {filtered.length === 0 && <p className="text-center text-gray-500 py-8">No sessions found.</p>}
         </div>
       )}
     </div>
