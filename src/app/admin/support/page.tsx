@@ -34,7 +34,7 @@ export default async function SupportPage() {
       <div className="flex items-center justify-between">
         <div>
           <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-xs font-semibold text-emerald-300 mb-2">
-            💬 Customer Care
+            Customer Care
           </div>
           <h1 className="text-3xl font-extrabold text-white tracking-tight">Support Tickets</h1>
           <p className="text-slate-400 text-sm mt-1">
@@ -50,7 +50,6 @@ export default async function SupportPage() {
       {/* Tickets List Table */}
       {tickets.length === 0 ? (
         <div className="wimbf-glass rounded-3xl p-12 text-center space-y-3">
-          <span className="text-4xl">💬</span>
           <h3 className="text-lg font-bold text-white">No Support Tickets</h3>
           <p className="text-xs text-slate-400">All player inquiries are resolved!</p>
         </div>

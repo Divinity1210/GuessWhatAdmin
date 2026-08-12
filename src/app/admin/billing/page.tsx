@@ -3,7 +3,7 @@ export default function BillingPage() {
     <div className="space-y-8 max-w-7xl mx-auto">
       <div>
         <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-amber-500/10 border border-amber-500/20 text-xs font-semibold text-amber-300 mb-2">
-          💎 VAS & Paystack Billing
+          VAS & Paystack Billing
         </div>
         <h1 className="text-3xl font-extrabold text-white tracking-tight">Billing & Monetization</h1>
         <p className="text-slate-400 text-sm mt-1">
@@ -32,7 +32,6 @@ export default function BillingPage() {
       </div>
 
       <div className="wimbf-glass rounded-3xl p-12 text-center space-y-4 border border-white/5">
-        <span className="text-5xl">💎</span>
         <h2 className="text-xl font-bold text-white">VAS & Direct Billing Hub</h2>
         <p className="text-sm text-slate-400 max-w-lg mx-auto">
           Subscription metrics, recurring billing webhooks, carrier billing settlement, and token conversion feeds will automatically populate here upon Phase 3 activation.

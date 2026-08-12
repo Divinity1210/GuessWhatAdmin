@@ -131,7 +131,7 @@ export default function SessionsPage() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-violet-500/10 border border-violet-500/20 text-xs font-semibold text-violet-300 mb-2">
-            🎯 Game Operations
+            Game Operations
           </div>
           <h1 className="text-3xl font-extrabold text-white tracking-tight">Game Sessions</h1>
           <p className="text-slate-400 text-sm mt-1">
@@ -141,10 +141,9 @@ export default function SessionsPage() {
 
         <button
           onClick={() => setShowCreate(!showCreate)}
-          className="inline-flex items-center gap-2 px-5 py-3 rounded-2xl bg-gradient-to-r from-violet-600 to-indigo-600 hover:from-violet-500 hover:to-indigo-500 text-white font-semibold text-sm shadow-lg shadow-violet-600/20 transition-all duration-200 hover:scale-[1.02]"
+          className="inline-flex items-center gap-2 px-5 py-3 rounded-2xl bg-violet-600 hover:bg-violet-500 text-white font-semibold text-sm transition-all duration-200 hover:scale-[1.02]"
         >
-          <span>{showCreate ? "✕" : "🎮"}</span>
-          <span>{showCreate ? "Close Drawer" : "Create Session"}</span>
+          <span>{showCreate ? "Close Drawer" : "+ Create Session"}</span>
         </button>
       </div>
 
@@ -277,7 +276,7 @@ export default function SessionsPage() {
             <button
               type="submit"
               disabled={creating}
-              className="px-6 py-3 rounded-2xl bg-gradient-to-r from-violet-600 to-indigo-600 text-white font-bold text-sm transition-all disabled:opacity-50"
+              className="px-6 py-3 rounded-2xl bg-violet-600 hover:bg-violet-500 text-white font-bold text-sm transition-all disabled:opacity-50"
             >
               {creating ? "Creating Session..." : "Save & Create Session"}
             </button>
@@ -317,7 +316,6 @@ export default function SessionsPage() {
         </div>
       ) : filtered.length === 0 ? (
         <div className="wimbf-glass rounded-3xl p-12 text-center space-y-3">
-          <span className="text-4xl">🎯</span>
           <h3 className="text-lg font-bold text-white">No Sessions Found</h3>
           <p className="text-xs text-slate-400">No sessions match the selected filter category.</p>
         </div>
@@ -374,7 +372,7 @@ export default function SessionsPage() {
                     ₦{s.prize_pool.toLocaleString()}
                   </span>
                   <span className="px-3 py-1.5 rounded-xl bg-white/5 border border-white/10 text-slate-300 font-medium">
-                    🪙 {s.entry_fee_coins} coins
+                    {s.entry_fee_coins} coins
                   </span>
                 </div>
 

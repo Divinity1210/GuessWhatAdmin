@@ -114,7 +114,7 @@ export default function QuestionsPage() {
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
           <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-amber-500/10 border border-amber-500/20 text-xs font-semibold text-amber-300 mb-2">
-            🧠 Trivia Pool
+            Trivia Pool
           </div>
           <h1 className="text-3xl font-extrabold text-white tracking-tight">Question Bank</h1>
           <p className="text-slate-400 text-sm mt-1">
@@ -124,10 +124,9 @@ export default function QuestionsPage() {
 
         <button
           onClick={() => setShowCreate(!showCreate)}
-          className="inline-flex items-center gap-2 px-5 py-3 rounded-2xl bg-gradient-to-r from-amber-500 to-indigo-600 hover:from-amber-400 hover:to-indigo-500 text-white font-semibold text-sm shadow-lg shadow-amber-500/20 transition-all duration-200 hover:scale-[1.02]"
+          className="inline-flex items-center gap-2 px-5 py-3 rounded-2xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-semibold text-sm transition-all duration-200 hover:scale-[1.02]"
         >
-          <span>{showCreate ? "✕" : "➕"}</span>
-          <span>{showCreate ? "Close Drawer" : "Create Question"}</span>
+          <span>{showCreate ? "Close Drawer" : "+ Create Question"}</span>
         </button>
       </div>
 
@@ -268,7 +267,6 @@ export default function QuestionsPage() {
         </div>
       ) : filteredQuestions.length === 0 ? (
         <div className="wimbf-glass rounded-3xl p-12 text-center space-y-3">
-          <span className="text-4xl">🧠</span>
           <h3 className="text-lg font-bold text-white">No Questions Found</h3>
           <p className="text-xs text-slate-400">No trivia items match the current status filter.</p>
         </div>

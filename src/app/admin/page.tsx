@@ -54,76 +54,67 @@ export default async function AdminDashboard() {
       label: "Total Registered Players",
       value: stats.totalPlayers.toLocaleString(),
       change: "+12.4% this month",
-      icon: "👑",
       badge: "Players",
-      gradient: "from-indigo-500/20 via-indigo-500/5 to-transparent",
       borderColor: "border-indigo-500/30",
       textColor: "text-indigo-400",
+      bgColor: "bg-indigo-500/10",
     },
     {
       label: "New Weekly Signups",
       value: stats.recentSignups.toLocaleString(),
       change: "Active user growth",
-      icon: "⚡",
       badge: "7 Days",
-      gradient: "from-emerald-500/20 via-emerald-500/5 to-transparent",
       borderColor: "border-emerald-500/30",
       textColor: "text-emerald-400",
+      bgColor: "bg-emerald-500/10",
     },
     {
       label: "Active Live Sessions",
       value: stats.activeSessions.toString(),
       change: stats.activeSessions > 0 ? "Game Engine Active" : "Standing by",
-      icon: "🔥",
       badge: "Live",
-      gradient: "from-rose-500/20 via-rose-500/5 to-transparent",
       borderColor: "border-rose-500/30",
       textColor: "text-rose-400",
+      bgColor: "bg-rose-500/10",
     },
     {
       label: "Total Sessions Run",
       value: stats.totalSessions.toString(),
       change: "Completed trivia runs",
-      icon: "🎯",
       badge: "History",
-      gradient: "from-violet-500/20 via-violet-500/5 to-transparent",
       borderColor: "border-violet-500/30",
       textColor: "text-violet-400",
+      bgColor: "bg-violet-500/10",
     },
     {
       label: "Question Bank Pool",
       value: stats.totalQuestions.toString(),
       change: "Available trivia items",
-      icon: "🧠",
       badge: "Questions",
-      gradient: "from-amber-500/20 via-amber-500/5 to-transparent",
       borderColor: "border-amber-500/30",
       textColor: "text-amber-400",
+      bgColor: "bg-amber-500/10",
     },
     {
       label: "Pending Support Tickets",
       value: stats.openTickets.toString(),
       change: stats.openTickets === 0 ? "All tickets resolved" : "Requires review",
-      icon: "💬",
       badge: "Support",
-      gradient: "from-sky-500/20 via-sky-500/5 to-transparent",
       borderColor: "border-sky-500/30",
       textColor: "text-sky-400",
+      bgColor: "bg-sky-500/10",
     },
   ];
 
   return (
     <div className="space-y-8 max-w-7xl mx-auto">
-      {/* Hero Welcome Banner */}
-      <div className="relative overflow-hidden rounded-3xl border border-white/10 bg-gradient-to-r from-[#121723] via-[#10141f] to-[#0c0f18] p-8 shadow-2xl">
-        <div className="absolute -top-24 -right-24 size-96 rounded-full bg-indigo-600/10 blur-3xl pointer-events-none" />
-        <div className="absolute -bottom-24 -left-24 size-96 rounded-full bg-amber-500/10 blur-3xl pointer-events-none" />
-
-        <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-6">
+      {/* Welcome Banner */}
+      <div className="relative overflow-hidden rounded-3xl border border-white/10 bg-[#121723] p-8">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-6">
           <div className="space-y-2">
-            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-gradient-to-r from-indigo-500/20 to-violet-500/20 border border-indigo-500/30 text-xs font-semibold text-indigo-300">
+            <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-500/15 border border-indigo-500/30 text-xs font-semibold text-indigo-300">
               <span className="size-2 rounded-full bg-indigo-400 animate-ping" />
-              WIMBF Admin Suite • Operational Control
+              WIMBF Admin Suite
             </div>
             <h1 className="text-3xl md:text-4xl font-extrabold tracking-tight text-white">
               Platform Command Dashboard
@@ -136,17 +127,15 @@ export default async function AdminDashboard() {
           <div className="flex flex-wrap items-center gap-3">
             <Link
               href="/admin/sessions"
-              className="inline-flex items-center gap-2.5 px-5 py-3 rounded-2xl bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white font-semibold text-sm shadow-xl shadow-indigo-600/25 transition-all duration-200 hover:scale-[1.02]"
+              className="inline-flex items-center gap-2.5 px-5 py-3 rounded-2xl bg-indigo-600 hover:bg-indigo-500 text-white font-semibold text-sm transition-all duration-200 hover:scale-[1.02]"
             >
-              <span>🎮</span>
-              <span>Launch Session</span>
+              Launch Session
             </Link>
             <Link
               href="/admin/questions"
-              className="inline-flex items-center gap-2.5 px-5 py-3 rounded-2xl bg-white/5 hover:bg-white/10 border border-white/10 text-slate-200 font-semibold text-sm backdrop-blur-xl transition-all duration-200"
+              className="inline-flex items-center gap-2.5 px-5 py-3 rounded-2xl bg-white/5 hover:bg-white/10 border border-white/10 text-slate-200 font-semibold text-sm transition-all duration-200"
             >
-              <span>🧠</span>
-              <span>New Question</span>
+              New Question
             </Link>
           </div>
         </div>
@@ -157,13 +146,13 @@ export default async function AdminDashboard() {
         {statCards.map((card) => (
           <div
             key={card.label}
-            className={`wimbf-glass wimbf-glass-hover relative overflow-hidden rounded-2xl p-6 border ${card.borderColor}`}
+            className={`relative overflow-hidden rounded-2xl p-6 border bg-[#0f1219] ${card.borderColor}`}
           >
-            <div className={`absolute inset-0 bg-gradient-to-br ${card.gradient} pointer-events-none`} />
-
-            <div className="relative z-10 space-y-4">
+            <div className="space-y-4">
               <div className="flex items-center justify-between">
-                <span className="text-3xl">{card.icon}</span>
+                <span className={`size-10 rounded-xl ${card.bgColor} ${card.textColor} flex items-center justify-center text-sm font-bold`}>
+                  {card.value}
+                </span>
                 <span className={`text-[10px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-full bg-white/5 border ${card.borderColor} ${card.textColor}`}>
                   {card.badge}
                 </span>
@@ -190,14 +179,14 @@ export default async function AdminDashboard() {
       {/* Two Column Layout: Quick Actions & Live Session Status */}
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
         {/* Quick Actions Panel */}
-        <div className="wimbf-glass rounded-2xl p-6 space-y-6 lg:col-span-2">
+        <div className="rounded-2xl p-6 space-y-6 lg:col-span-2 bg-[#0f1219] border border-white/5">
           <div className="flex items-center justify-between border-b border-white/5 pb-4">
             <div>
               <h2 className="text-lg font-bold text-white tracking-tight">Quick Operations</h2>
               <p className="text-xs text-slate-400">Direct management triggers for the GuessWhat engine</p>
             </div>
             <span className="px-3 py-1 rounded-full bg-white/5 text-xs font-medium text-slate-300 border border-white/10">
-              Shortcut Center
+              Shortcuts
             </span>
           </div>
 
@@ -206,8 +195,8 @@ export default async function AdminDashboard() {
               href="/admin/questions"
               className="flex items-start gap-4 p-4 rounded-xl bg-white/[0.02] hover:bg-white/[0.06] border border-white/5 hover:border-indigo-500/30 transition-all group"
             >
-              <div className="size-11 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 flex items-center justify-center text-xl group-hover:scale-110 transition-transform">
-                🧠
+              <div className="size-11 rounded-xl bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 flex items-center justify-center text-sm font-bold group-hover:scale-110 transition-transform">
+                Q
               </div>
               <div className="space-y-1">
                 <h3 className="text-sm font-semibold text-white group-hover:text-indigo-400 transition-colors">
@@ -221,8 +210,8 @@ export default async function AdminDashboard() {
               href="/admin/sessions"
               className="flex items-start gap-4 p-4 rounded-xl bg-white/[0.02] hover:bg-white/[0.06] border border-white/5 hover:border-violet-500/30 transition-all group"
             >
-              <div className="size-11 rounded-xl bg-violet-500/10 border border-violet-500/20 text-violet-400 flex items-center justify-center text-xl group-hover:scale-110 transition-transform">
-                🎯
+              <div className="size-11 rounded-xl bg-violet-500/10 border border-violet-500/20 text-violet-400 flex items-center justify-center text-sm font-bold group-hover:scale-110 transition-transform">
+                S
               </div>
               <div className="space-y-1">
                 <h3 className="text-sm font-semibold text-white group-hover:text-violet-400 transition-colors">
@@ -236,8 +225,8 @@ export default async function AdminDashboard() {
               href="/admin/players"
               className="flex items-start gap-4 p-4 rounded-xl bg-white/[0.02] hover:bg-white/[0.06] border border-white/5 hover:border-amber-500/30 transition-all group"
             >
-              <div className="size-11 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-400 flex items-center justify-center text-xl group-hover:scale-110 transition-transform">
-                👑
+              <div className="size-11 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-400 flex items-center justify-center text-sm font-bold group-hover:scale-110 transition-transform">
+                P
               </div>
               <div className="space-y-1">
                 <h3 className="text-sm font-semibold text-white group-hover:text-amber-400 transition-colors">
@@ -251,8 +240,8 @@ export default async function AdminDashboard() {
               href="/admin/support"
               className="flex items-start gap-4 p-4 rounded-xl bg-white/[0.02] hover:bg-white/[0.06] border border-white/5 hover:border-emerald-500/30 transition-all group"
             >
-              <div className="size-11 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 flex items-center justify-center text-xl group-hover:scale-110 transition-transform">
-                💬
+              <div className="size-11 rounded-xl bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 flex items-center justify-center text-sm font-bold group-hover:scale-110 transition-transform">
+                T
               </div>
               <div className="space-y-1">
                 <h3 className="text-sm font-semibold text-white group-hover:text-emerald-400 transition-colors">
@@ -265,7 +254,7 @@ export default async function AdminDashboard() {
         </div>
 
         {/* Engine Health & Active Session */}
-        <div className="wimbf-glass rounded-2xl p-6 space-y-6">
+        <div className="rounded-2xl p-6 space-y-6 bg-[#0f1219] border border-white/5">
           <div className="border-b border-white/5 pb-4">
             <h2 className="text-lg font-bold text-white tracking-tight">System Status</h2>
             <p className="text-xs text-slate-400">Cloud database & node connectivity</p>
@@ -304,14 +293,14 @@ export default async function AdminDashboard() {
           </div>
 
           {stats.activeSession ? (
-            <div className="p-4 rounded-xl bg-gradient-to-r from-rose-500/10 via-amber-500/10 to-transparent border border-rose-500/20 space-y-2">
+            <div className="p-4 rounded-xl bg-rose-500/10 border border-rose-500/20 space-y-2">
               <div className="flex items-center justify-between">
                 <span className="text-xs font-bold text-rose-400 uppercase tracking-wider flex items-center gap-1.5">
                   <span className="size-2 rounded-full bg-rose-500 animate-ping" />
                   Live Now
                 </span>
                 <span className="text-xs text-slate-400">
-                  Prize: ₦{stats.activeSession.prize_pool.toLocaleString()}
+                  Prize: N{stats.activeSession.prize_pool.toLocaleString()}
                 </span>
               </div>
               <p className="text-sm font-bold text-white truncate">{stats.activeSession.name}</p>
@@ -319,7 +308,7 @@ export default async function AdminDashboard() {
                 href="/admin/sessions"
                 className="block text-center text-xs font-semibold text-amber-400 hover:underline pt-1"
               >
-                Manage Active Session →
+                Manage Active Session &rarr;
               </Link>
             </div>
           ) : (

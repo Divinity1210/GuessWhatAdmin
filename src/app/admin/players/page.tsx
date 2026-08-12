@@ -38,7 +38,7 @@ export default async function PlayersPage() {
       <div className="flex items-center justify-between">
         <div>
           <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-xs font-semibold text-indigo-300 mb-2">
-            👑 User Hub
+            User Hub
           </div>
           <h1 className="text-3xl font-extrabold text-white tracking-tight">Player Directory</h1>
           <p className="text-slate-400 text-sm mt-1">
@@ -54,7 +54,6 @@ export default async function PlayersPage() {
       {/* Players Directory Table */}
       {players.length === 0 ? (
         <div className="wimbf-glass rounded-3xl p-12 text-center space-y-3">
-          <span className="text-4xl">👑</span>
           <h3 className="text-lg font-bold text-white">No Players Found</h3>
           <p className="text-xs text-slate-400">No registered player accounts in the system.</p>
         </div>
@@ -113,7 +112,7 @@ export default async function PlayersPage() {
                     </td>
 
                     <td className="px-6 py-4 text-right font-bold text-amber-400">
-                      🪙 {(p.wallets?.[0]?.coin_balance ?? 0).toLocaleString()}
+                      {(p.wallets?.[0]?.coin_balance ?? 0).toLocaleString()} coins
                     </td>
 
                     <td className="px-6 py-4 text-right font-bold text-emerald-400">
