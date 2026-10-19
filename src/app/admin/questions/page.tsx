@@ -17,6 +17,82 @@ type Question = {
 const STATUSES = ["draft", "submitted", "review", "approved", "scheduled", "published", "archived"];
 const CATEGORIES = ["General Knowledge", "Sports", "Entertainment", "Food", "Lifestyle", "Technology", "Culture"];
 
+const VIRAL_NAIJA_QUESTION_PACK: {
+  title: string;
+  category: string;
+  tags: string[];
+  options: string[];
+}[] = [
+  {
+    title: "If Burna Boy, Wizkid, Davido & Rema drop an album at midnight, who gets #1 on Apple Music NG first?",
+    category: "Entertainment",
+    tags: ["afrobeats", "naija", "music"],
+    options: ["Davido (30BG)", "Wizkid (FC)", "Burna Boy (Outsiders)", "Rema (Ravers)"],
+  },
+  {
+    title: "Which Nigerian food combo has the most undefeated street reputation?",
+    category: "Food",
+    tags: ["food", "naija", "street"],
+    options: [
+      "Smoky Party Jollof + Plantain + Peppered Turkey",
+      "Hot Agege Bread + Ewa Agoyin",
+      "Pounded Yam + Egusi + Assorted",
+      "Abacha + Ugba + Fried Fish",
+    ],
+  },
+  {
+    title: "What is the #1 phrase a Nigerian says right before ghosting you or arriving 2 hours late?",
+    category: "Culture",
+    tags: ["naija", "street-banter", "relatable"],
+    options: [
+      "\"I dey come, I'm on my way\"",
+      "\"Network dey craze here\"",
+      "\"Wait let me call you back\"",
+      "\"I'm just at the junction\"",
+    ],
+  },
+  {
+    title: "When a transfer takes more than 3 minutes at a POS or restaurant in Lagos, which app do Nigerians trust most to save the day?",
+    category: "Technology",
+    tags: ["fintech", "naija", "payments"],
+    options: ["OPay", "PalmPay", "Moniepoint", "Traditional Bank App"],
+  },
+  {
+    title: "Which Nigerian university campus has the loudest social life and street clout?",
+    category: "Lifestyle",
+    tags: ["campus", "turf-wars", "youth"],
+    options: ["UNILAG (Akoka)", "OAU (Ife)", "UI (Ibadan)", "Covenant / Babcock"],
+  },
+  {
+    title: "Who is the most clutch Super Eagles player when Nigeria needs a last-minute goal?",
+    category: "Sports",
+    tags: ["football", "super-eagles", "afcon"],
+    options: ["Victor Osimhen", "Ademola Lookman", "Alex Iwobi", "Samuel Chukwueze"],
+  },
+  {
+    title: "You win ₦1,000,000 on GuessWhat tonight — what is most Nigerians' very first move?",
+    category: "Lifestyle",
+    tags: ["money", "naija", "vibes"],
+    options: [
+      "Lock 70% in savings / dollar stash immediately",
+      "Send urgent 2k to Mom / Day-1s",
+      "Upgrade phone or clear sub & data",
+      "Keep quiet and act broke",
+    ],
+  },
+  {
+    title: "In the eternal West African Jollof debate, what do most players pick as the secret weapon?",
+    category: "Food",
+    tags: ["jollof", "africa", "food"],
+    options: [
+      "Firewood smoky bottom pot (Naija style)",
+      "Heavy spiced basmati (Ghana style)",
+      "Fried plantain (Dodo) on the side",
+      "Peppered goat meat / ram",
+    ],
+  },
+];
+
 export default function QuestionsPage() {
   const [questions, setQuestions] = useState<Question[]>([]);
   const [loading, setLoading] = useState(true);
@@ -29,6 +105,8 @@ export default function QuestionsPage() {
   const [category, setCategory] = useState(CATEGORIES[0]);
   const [options, setOptions] = useState(["", "", "", ""]);
   const [creating, setCreating] = useState(false);
+  const [seedingPack, setSeedingPack] = useState(false);
+  const [seedMessage, setSeedMessage] = useState<string | null>(null);
 
   const sb = createClientComponentClient();
 
@@ -49,6 +127,55 @@ export default function QuestionsPage() {
   useEffect(() => {
     loadQuestions();
   }, [filter]);
+
+  const handleSeedViralPack = async () => {
+    setSeedingPack(true);
+    setSeedMessage(null);
+    let addedCount = 0;
+
+    try {
+      const existingTitles = new Set(questions.map((q) => q.title.trim().toLowerCase()));
+
+      for (const item of VIRAL_NAIJA_QUESTION_PACK) {
+        if (existingTitles.has(item.title.trim().toLowerCase())) continue;
+
+        const { data: q, error: qErr } = await sb
+          .from("questions")
+          .insert({
+            title: item.title,
+            category: item.category,
+            type: "text",
+            status: "published",
+            tags: item.tags,
+          })
+          .select("id")
+          .single();
+
+        if (qErr || !q) continue;
+
+        await sb.from("question_options").insert(
+          item.options.map((label, idx) => ({
+            question_id: q.id,
+            label,
+            position: idx,
+          }))
+        );
+        addedCount++;
+      }
+
+      setSeedMessage(
+        addedCount > 0
+          ? `Seeded ${addedCount} published Naija & Africa crowd-prediction questions!`
+          : "All 8 Viral Naija Pack questions are already in your Question Bank."
+      );
+      await loadQuestions();
+    } catch (err) {
+      console.error("Failed to seed viral pack:", err);
+      setSeedMessage("Could not seed pack — check Supabase connection/permissions.");
+    } finally {
+      setSeedingPack(false);
+    }
+  };
 
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -118,17 +245,42 @@ export default function QuestionsPage() {
           </div>
           <h1 className="text-3xl font-extrabold text-white tracking-tight">Question Bank</h1>
           <p className="text-slate-400 text-sm mt-1">
-            Manage, approve, and curate trivia questions for session rosters.
+            Manage, approve, and curate crowd-prediction questions for session rosters.
           </p>
         </div>
 
-        <button
-          onClick={() => setShowCreate(!showCreate)}
-          className="inline-flex items-center gap-2 px-5 py-3 rounded-2xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-semibold text-sm transition-all duration-200 hover:scale-[1.02]"
-        >
-          <span>{showCreate ? "Close Drawer" : "+ Create Question"}</span>
-        </button>
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            onClick={handleSeedViralPack}
+            disabled={seedingPack}
+            className="inline-flex items-center gap-2 px-4 py-3 rounded-2xl bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-300 font-semibold text-sm transition-all duration-200 disabled:opacity-50"
+          >
+            <span>⚡</span>
+            <span>{seedingPack ? "Seeding Naija Pack..." : "Seed Viral Naija Pack (8)"}</span>
+          </button>
+
+          <button
+            onClick={() => setShowCreate(!showCreate)}
+            className="inline-flex items-center gap-2 px-5 py-3 rounded-2xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-semibold text-sm transition-all duration-200 hover:scale-[1.02]"
+          >
+            <span>{showCreate ? "Close Drawer" : "+ Create Question"}</span>
+          </button>
+        </div>
       </div>
+
+      {seedMessage && (
+        <div className="rounded-2xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-3 text-xs font-semibold text-emerald-300 flex items-center justify-between">
+          <span>{seedMessage}</span>
+          <button
+            type="button"
+            onClick={() => setSeedMessage(null)}
+            className="text-emerald-200/70 hover:text-white"
+          >
+            Dismiss
+          </button>
+        </div>
+      )}
 
       {/* Creation Drawer / Card */}
       {showCreate && (
@@ -266,9 +418,19 @@ export default function QuestionsPage() {
           <p className="text-xs text-slate-400">Loading trivia question bank...</p>
         </div>
       ) : filteredQuestions.length === 0 ? (
-        <div className="wimbf-glass rounded-3xl p-12 text-center space-y-3">
+        <div className="wimbf-glass rounded-3xl p-12 text-center space-y-4">
           <h3 className="text-lg font-bold text-white">No Questions Found</h3>
-          <p className="text-xs text-slate-400">No trivia items match the current status filter.</p>
+          <p className="text-xs text-slate-400">
+            No trivia items match the current status filter — or seed our ready-made Naija & Africa pack below.
+          </p>
+          <button
+            type="button"
+            onClick={handleSeedViralPack}
+            disabled={seedingPack}
+            className="inline-flex items-center gap-2 px-5 py-2.5 rounded-2xl bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/30 text-emerald-300 font-semibold text-xs transition-all"
+          >
+            ⚡ {seedingPack ? "Seeding..." : "1-Click Seed Viral Naija Pack (8 Questions)"}
+          </button>
         </div>
       ) : (
         <div className="wimbf-glass rounded-3xl overflow-hidden border border-white/5">
