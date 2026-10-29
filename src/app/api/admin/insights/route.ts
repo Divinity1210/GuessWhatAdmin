@@ -45,6 +45,7 @@ export async function GET(req: NextRequest) {
     const [
       { data: questions },
       { data: answers },
+      { data: entries },
       { data: profiles },
       { data: sessions },
     ] = await Promise.all([
@@ -54,8 +55,11 @@ export async function GET(req: NextRequest) {
         .order("created_at", { ascending: false }),
       supabase
         .from("answers")
-        .select("id, session_id, user_id, question_id, option_id, response_ms, answered_at")
+        .select("id, entry_id, session_id, question_id, option_id, response_ms, answered_at")
         .order("answered_at", { ascending: false }),
+      supabase
+        .from("session_entries")
+        .select("id, user_id"),
       supabase
         .from("profiles")
         .select("id, gender, date_of_birth, state"),
@@ -64,6 +68,11 @@ export async function GET(req: NextRequest) {
         .select("id, name, status, starts_at")
         .order("starts_at", { ascending: false }),
     ]);
+
+    const entryUserMap = new Map<string, string>();
+    for (const e of entries ?? []) {
+      entryUserMap.set(e.id, e.user_id);
+    }
 
     const profileMap = new Map<
       string,
@@ -120,7 +129,8 @@ export async function GET(req: NextRequest) {
       if (questionFilter !== "all" && q.id !== questionFilter) return false;
       if (sessionFilter !== "all" && ans.session_id !== sessionFilter) return false;
 
-      const dem = profileMap.get(ans.user_id) ?? {
+      const userId = entryUserMap.get(ans.entry_id) ?? "";
+      const dem = profileMap.get(userId) ?? {
         gender: "Unspecified",
         ageBand: "Unspecified",
         state: "Unspecified",
@@ -154,9 +164,10 @@ export async function GET(req: NextRequest) {
     let totalResponseMs = 0;
 
     for (const ans of filteredAnswers) {
-      respondentSet.add(ans.user_id);
+      const userId = entryUserMap.get(ans.entry_id) ?? ans.entry_id;
+      respondentSet.add(userId);
       totalResponseMs += Number(ans.response_ms ?? 0);
-      const dem = profileMap.get(ans.user_id) ?? {
+      const dem = profileMap.get(userId) ?? {
         gender: "Unspecified",
         ageBand: "Unspecified",
         state: "Unspecified",
@@ -182,6 +193,7 @@ export async function GET(req: NextRequest) {
     >();
 
     for (const ans of filteredAnswers) {
+      const userId = entryUserMap.get(ans.entry_id) ?? "";
       const cur = optionStats.get(ans.option_id) ?? {
         count: 0,
         totalMs: 0,
@@ -192,7 +204,7 @@ export async function GET(req: NextRequest) {
       };
       cur.count += 1;
       cur.totalMs += Number(ans.response_ms ?? 0);
-      const dem = profileMap.get(ans.user_id);
+      const dem = profileMap.get(userId);
       if (dem) {
         if (dem.gender === "Male") cur.male += 1;
         if (dem.gender === "Female") cur.female += 1;
@@ -359,14 +371,15 @@ export async function GET(req: NextRequest) {
       }
 
       for (const ans of filteredAnswers) {
+        const userId = entryUserMap.get(ans.entry_id) ?? ans.entry_id;
         const q = questionMap.get(ans.question_id);
         const meta = optMeta.get(ans.option_id);
-        const dem = profileMap.get(ans.user_id) ?? {
+        const dem = profileMap.get(userId) ?? {
           gender: "Unspecified",
           ageBand: "Unspecified",
           state: "Unspecified",
         };
-        const anonHash = `resp_${String(ans.user_id).replace(/-/g, "").slice(0, 10)}`;
+        const anonHash = `resp_${String(userId).replace(/-/g, "").slice(0, 10)}`;
 
         rows.push(
           [
