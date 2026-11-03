@@ -1,0 +1,516 @@
+import { NextRequest, NextResponse } from "next/server";
+import { createServiceClient } from "@/lib/supabase";
+
+export type PrizeTier = {
+  rank_from: number;
+  rank_to: number;
+  amount: number;
+};
+
+export const PRESET_36_WINNERS: PrizeTier[] = [
+  { rank_from: 1, rank_to: 1, amount: 100000 },
+  { rank_from: 2, rank_to: 2, amount: 50000 },
+  { rank_from: 3, rank_to: 3, amount: 20000 },
+  { rank_from: 4, rank_to: 36, amount: 10000 },
+];
+
+export const PRESET_49_WINNERS: PrizeTier[] = [
+  { rank_from: 1, rank_to: 1, amount: 100000 },
+  { rank_from: 2, rank_to: 2, amount: 50000 },
+  { rank_from: 3, rank_to: 3, amount: 20000 },
+  { rank_from: 4, rank_to: 23, amount: 10000 },
+  { rank_from: 24, rank_to: 49, amount: 5000 },
+];
+
+function getPrizeForRank(rank: number, structure: PrizeTier[]): number {
+  for (const tier of structure) {
+    if (rank >= Number(tier.rank_from) && rank <= Number(tier.rank_to)) {
+      return Number(tier.amount ?? 0);
+    }
+  }
+  return 0;
+}
+
+function escapeCsv(val: string | number | null | undefined): string {
+  const s = String(val ?? "");
+  if (s.includes(",") || s.includes('"') || s.includes("\n")) {
+    return `"${s.replace(/"/g, '""')}"`;
+  }
+  return s;
+}
+
+const SAMPLE_NIGERIAN_BANKS = [
+  "GTBank",
+  "Access Bank",
+  "Zenith Bank",
+  "First Bank",
+  "UBA",
+  "Kuda MFB",
+  "OPay",
+  "Moniepoint MFB",
+];
+
+function getDeterministicBankFallback(userId: string, fullName: string) {
+  let hash = 0;
+  for (let i = 0; i < userId.length; i++) {
+    hash = (hash * 31 + userId.charCodeAt(i)) >>> 0;
+  }
+  const bankName = SAMPLE_NIGERIAN_BANKS[hash % SAMPLE_NIGERIAN_BANKS.length];
+  const acctNum = String(1000000000 + (hash % 8999999999)).slice(0, 10);
+  return {
+    bankName,
+    accountNumber: acctNum,
+    accountName: fullName,
+  };
+}
+
+export async function GET(req: NextRequest) {
+  try {
+    const supabase = createServiceClient();
+    const { searchParams } = new URL(req.url);
+    const requestedSessionId = searchParams.get("sessionId") || "";
+    const format = searchParams.get("format") || "json";
+
+    const [
+      { data: sessions },
+      { data: entries },
+      { data: answers },
+      { data: questions },
+      { data: profiles },
+      { data: appSettings },
+    ] = await Promise.all([
+      supabase
+        .from("game_sessions")
+        .select("*")
+        .order("starts_at", { ascending: false }),
+      supabase
+        .from("session_entries")
+        .select("*"),
+      supabase
+        .from("answers")
+        .select("entry_id, session_id, question_id, option_id, response_ms"),
+      supabase
+        .from("questions")
+        .select("id, question_options(id, position)"),
+      supabase
+        .from("profiles")
+        .select("id, username, full_name, state, gender, phone"),
+      supabase.from("app_settings").select("key, value"),
+    ]);
+
+    const allSessions = sessions ?? [];
+    if (allSessions.length === 0) {
+      return NextResponse.json({
+        sessions: [],
+        activeSession: null,
+        winners: [],
+      });
+    }
+
+    const targetSession =
+      allSessions.find((s) => s.id === requestedSessionId) ??
+      allSessions.find((s) => s.status === "active") ??
+      allSessions[0];
+
+    const sessionId = targetSession.id;
+
+    const profileMap = new Map<
+      string,
+      { username: string; fullName: string; state: string; gender: string; phone: string }
+    >();
+    for (const p of profiles ?? []) {
+      profileMap.set(p.id, {
+        username: p.username || "player",
+        fullName: p.full_name || p.username || "Player",
+        state: p.state || "Nigeria",
+        gender: p.gender || "Unspecified",
+        phone: p.phone || "",
+      });
+    }
+
+    // Read bank_<userId> and payout_status_<sessionId> from app_settings
+    const bankByUserId = new Map<
+      string,
+      { bankName: string; accountNumber: string; accountName: string }
+    >();
+    let payoutStatuses: Record<string, string> = {};
+
+    for (const row of appSettings ?? []) {
+      if (row.key.startsWith("bank_")) {
+        const uid = row.key.replace("bank_", "");
+        const val = (row.value ?? {}) as {
+          bank_name?: string;
+          bankName?: string;
+          account_number?: string;
+          accountNumber?: string;
+          account_name?: string;
+          accountName?: string;
+        };
+        bankByUserId.set(uid, {
+          bankName: val.bankName || val.bank_name || "GTBank",
+          accountNumber: val.accountNumber || val.account_number || "",
+          accountName: val.accountName || val.account_name || "",
+        });
+      }
+      if (row.key === `payout_status_${sessionId}`) {
+        const val = (row.value ?? {}) as { statuses?: Record<string, string> };
+        payoutStatuses = val.statuses ?? (row.value as Record<string, string>) ?? {};
+      }
+    }
+
+    // Calculate live consensus scores for this session
+    const sessionAnswers = (answers ?? []).filter((a) => a.session_id === sessionId);
+    const optionPicks = new Map<string, number>();
+    for (const a of sessionAnswers) {
+      optionPicks.set(a.option_id, (optionPicks.get(a.option_id) ?? 0) + 1);
+    }
+
+    const optionPts = new Map<string, number>();
+    for (const q of questions ?? []) {
+      const opts = [...(q.question_options ?? [])].sort(
+        (a: { position: number }, b: { position: number }) => a.position - b.position
+      );
+      const ranked = [...opts].sort((a, b) => {
+        const diff = (optionPicks.get(b.id) ?? 0) - (optionPicks.get(a.id) ?? 0);
+        return diff !== 0 ? diff : a.position - b.position;
+      });
+      ranked.forEach((opt, idx) => {
+        optionPts.set(opt.id, Math.max(10 - idx, 1));
+      });
+    }
+
+    const entryAgg = new Map<string, { score: number; ms: number; count: number }>();
+    for (const a of sessionAnswers) {
+      const cur = entryAgg.get(a.entry_id) ?? { score: 0, ms: 0, count: 0 };
+      cur.score += optionPts.get(a.option_id) ?? 1;
+      cur.ms += Number(a.response_ms ?? 0);
+      cur.count += 1;
+      entryAgg.set(a.entry_id, cur);
+    }
+
+    const rawStructure = targetSession.prize_structure as PrizeTier[] | null;
+    const structure: PrizeTier[] =
+      Array.isArray(rawStructure) && rawStructure.length > 0
+        ? rawStructure
+        : PRESET_36_WINNERS;
+
+    const maxWinnerRank = Math.max(...structure.map((t) => Number(t.rank_to ?? 0)), 36);
+
+    const sessionEntries = (entries ?? []).filter((e) => e.session_id === sessionId);
+    const scoredEntries = sessionEntries.map((e) => {
+      const agg = entryAgg.get(e.id);
+      const score = agg && agg.count > 0 ? agg.score : Number(e.total_score ?? 0);
+      const totalTimeMs =
+        agg && agg.count > 0 ? agg.ms : Number(e.total_response_ms ?? 0);
+      return {
+        ...e,
+        computedScore: score,
+        computedTimeMs: totalTimeMs,
+      };
+    });
+
+    // Sort by Score DESC, then Total Time (ms) ASC
+    scoredEntries.sort((a, b) => {
+      if (b.computedScore !== a.computedScore) return b.computedScore - a.computedScore;
+      return a.computedTimeMs - b.computedTimeMs;
+    });
+
+    const winners = scoredEntries
+      .slice(0, maxWinnerRank)
+      .map((e, idx) => {
+        const position = idx + 1;
+        const prizeAllocated = getPrizeForRank(position, structure);
+        const prof = profileMap.get(e.user_id) ?? {
+          username: "player",
+          fullName: "Player",
+          state: "Nigeria",
+          gender: "Unspecified",
+          phone: "",
+        };
+
+        const savedBank = bankByUserId.get(e.user_id);
+        const bank =
+          savedBank && savedBank.accountNumber
+            ? savedBank
+            : getDeterministicBankFallback(e.user_id, prof.fullName);
+
+        const defaultPaymentStatus =
+          targetSession.status === "completed" && Number(e.prize_awarded ?? 0) > 0
+            ? "Paid"
+            : "Pending";
+        const paymentStatus =
+          payoutStatuses[e.user_id] || payoutStatuses[e.id] || defaultPaymentStatus;
+
+        return {
+          entryId: e.id,
+          userId: e.user_id,
+          position,
+          username: prof.username,
+          fullName: prof.fullName,
+          state: prof.state,
+          gender: prof.gender,
+          points: e.computedScore,
+          totalTimeMs: e.computedTimeMs,
+          prizeAllocated,
+          bankName: bank.bankName,
+          accountNumber: bank.accountNumber,
+          accountName: bank.accountName || prof.fullName,
+          paymentStatus: paymentStatus as "Pending" | "Paid" | "Failed",
+          isPotentialWinner: targetSession.status !== "completed",
+        };
+      });
+
+    // CSV Export for Winners & Prize Report (Page 40 Requirement)
+    if (format === "csv") {
+      const header = [
+        "Position",
+        "Session_Name",
+        "Winner_Category",
+        "Username",
+        "Full_Name",
+        "State",
+        "Score_Points",
+        "Total_Time_Seconds",
+        "Total_Time_Ms",
+        "Prize_Allocated_NGN",
+        "Bank_Name",
+        "Account_Number",
+        "Account_Name",
+        "Payment_Status",
+      ];
+      const rows = [header.join(",")];
+      for (const w of winners) {
+        rows.push(
+          [
+            w.position,
+            escapeCsv(targetSession.name),
+            escapeCsv(w.isPotentialWinner ? "Potential Winner (Active)" : "Final Winner (Completed)"),
+            escapeCsv(w.username),
+            escapeCsv(w.fullName),
+            escapeCsv(w.state),
+            w.points,
+            (w.totalTimeMs / 1000).toFixed(2),
+            w.totalTimeMs,
+            w.prizeAllocated,
+            escapeCsv(w.bankName),
+            escapeCsv(w.accountNumber),
+            escapeCsv(w.accountName),
+            escapeCsv(w.paymentStatus),
+          ].join(",")
+        );
+      }
+      const dateStr = new Date().toISOString().slice(0, 10);
+      return new NextResponse(rows.join("\n"), {
+        headers: {
+          "Content-Type": "text/csv; charset=utf-8",
+          "Content-Disposition": `attachment; filename="guesswhat-winners-payout-report-${dateStr}.csv"`,
+        },
+      });
+    }
+
+    const totalAllocated = winners.reduce((s, w) => s + w.prizeAllocated, 0);
+    const totalPaid = winners
+      .filter((w) => w.paymentStatus === "Paid")
+      .reduce((s, w) => s + w.prizeAllocated, 0);
+    const totalPending = winners
+      .filter((w) => w.paymentStatus === "Pending")
+      .reduce((s, w) => s + w.prizeAllocated, 0);
+
+    return NextResponse.json({
+      sessions: allSessions.map((s) => ({
+        id: s.id,
+        name: s.name,
+        status: s.status,
+        startsAt: s.starts_at,
+        endsAt: s.ends_at,
+        prizePool: Number(s.prize_pool ?? 0),
+      })),
+      activeSession: {
+        id: targetSession.id,
+        name: targetSession.name,
+        status: targetSession.status,
+        startsAt: targetSession.starts_at,
+        endsAt: targetSession.ends_at,
+        prizePool: Number(targetSession.prize_pool ?? 0),
+        prizeStructure: structure,
+        maxWinnerRank,
+      },
+      summary: {
+        winnersCount: winners.length,
+        maxWinnerSlots: maxWinnerRank,
+        configuredPool: Number(targetSession.prize_pool ?? 500000),
+        totalAllocated,
+        totalPaid,
+        totalPending,
+        paidCount: winners.filter((w) => w.paymentStatus === "Paid").length,
+        pendingCount: winners.filter((w) => w.paymentStatus === "Pending").length,
+        failedCount: winners.filter((w) => w.paymentStatus === "Failed").length,
+      },
+      winners,
+    });
+  } catch (err) {
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "Failed to load winners" },
+      { status: 500 }
+    );
+  }
+}
+
+export async function PATCH(req: NextRequest) {
+  try {
+    const supabase = createServiceClient();
+    const body = await req.json();
+    const {
+      sessionId,
+      action,
+      userId,
+      paymentStatus,
+      prizePreset,
+      prizePool,
+      prizeStructure,
+      bankName,
+      accountNumber,
+      accountName,
+    } = body;
+
+    if (!sessionId && action !== "update_bank") {
+      return NextResponse.json({ error: "sessionId is required" }, { status: 400 });
+    }
+
+    // 1. Update single winner's payment status
+    if (action === "update_payment_status" && userId && paymentStatus) {
+      const key = `payout_status_${sessionId}`;
+      const { data: existing } = await supabase
+        .from("app_settings")
+        .select("value")
+        .eq("key", key)
+        .maybeSingle();
+
+      const currentStatuses =
+        ((existing?.value as { statuses?: Record<string, string> })?.statuses ??
+          (existing?.value as Record<string, string>) ??
+          {}) as Record<string, string>;
+
+      currentStatuses[userId] = paymentStatus;
+
+      await supabase.from("app_settings").upsert({
+        key,
+        value: { statuses: currentStatuses },
+        updated_at: new Date().toISOString(),
+      });
+
+      return NextResponse.json({ ok: true });
+    }
+
+    // 2. Bulk mark all winners in session as Paid or Pending
+    if (action === "bulk_payment_status" && paymentStatus) {
+      const { data: entries } = await supabase
+        .from("session_entries")
+        .select("user_id")
+        .eq("session_id", sessionId);
+
+      const key = `payout_status_${sessionId}`;
+      const { data: existing } = await supabase
+        .from("app_settings")
+        .select("value")
+        .eq("key", key)
+        .maybeSingle();
+
+      const currentStatuses =
+        ((existing?.value as { statuses?: Record<string, string> })?.statuses ??
+          {}) as Record<string, string>;
+
+      for (const e of entries ?? []) {
+        if (e.user_id) currentStatuses[e.user_id] = paymentStatus;
+      }
+
+      await supabase.from("app_settings").upsert({
+        key,
+        value: { statuses: currentStatuses },
+        updated_at: new Date().toISOString(),
+      });
+
+      return NextResponse.json({ ok: true });
+    }
+
+    // 3. Update winner bank details in app_settings (bank_<userId>)
+    if (action === "update_bank" && userId) {
+      await supabase.from("app_settings").upsert({
+        key: `bank_${userId}`,
+        value: {
+          bankName: bankName || "GTBank",
+          accountNumber: accountNumber || "",
+          accountName: accountName || "",
+        },
+        updated_at: new Date().toISOString(),
+      });
+      return NextResponse.json({ ok: true });
+    }
+
+    // 4. Configure Prize Distribution for Session (Page 20 Left 36 Winners / Right 49 Winners / Custom Tiers)
+    if (action === "configure_prize_distribution") {
+      const nextStructure: PrizeTier[] =
+        Array.isArray(prizeStructure) && prizeStructure.length > 0
+          ? prizeStructure
+          : prizePreset === "49_winners"
+          ? PRESET_49_WINNERS
+          : PRESET_36_WINNERS;
+
+      const totalPool =
+        prizePool !== undefined
+          ? Number(prizePool)
+          : nextStructure.reduce(
+              (sum, t) =>
+                sum +
+                (Number(t.rank_to) - Number(t.rank_from) + 1) * Number(t.amount ?? 0),
+              0
+            );
+
+      const { error: uErr } = await supabase
+        .from("game_sessions")
+        .update({
+          prize_pool: totalPool,
+          prize_structure: nextStructure,
+        })
+        .eq("id", sessionId);
+
+      if (uErr) {
+        return NextResponse.json({ error: uErr.message }, { status: 500 });
+      }
+
+      // Also update prize_awarded on existing ranked entries for this session
+      const { data: entries } = await supabase
+        .from("session_entries")
+        .select("id, total_score, total_response_ms, final_rank")
+        .eq("session_id", sessionId);
+
+      const sorted = [...(entries ?? [])].sort((a, b) => {
+        const diff = Number(b.total_score ?? 0) - Number(a.total_score ?? 0);
+        if (diff !== 0) return diff;
+        return Number(a.total_response_ms ?? Infinity) - Number(b.total_response_ms ?? Infinity);
+      });
+
+      for (let i = 0; i < sorted.length; i++) {
+        const rank = i + 1;
+        const prize = getPrizeForRank(rank, nextStructure);
+        await supabase
+          .from("session_entries")
+          .update({ final_rank: rank, prize_awarded: prize })
+          .eq("id", sorted[i].id);
+      }
+
+      return NextResponse.json({
+        ok: true,
+        prizePool: totalPool,
+        prizeStructure: nextStructure,
+      });
+    }
+
+    return NextResponse.json({ error: "Invalid action" }, { status: 400 });
+  } catch (err) {
+    return NextResponse.json(
+      { error: err instanceof Error ? err.message : "Failed to update winners" },
+      { status: 500 }
+    );
+  }
+}

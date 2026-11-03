@@ -21,6 +21,10 @@ type QuestionBreakdown = {
   title: string;
   category: string;
   type: string;
+  assignedToSession?: boolean;
+  sessionPosition?: number | null;
+  sessionsUsedCount?: number;
+  usedSessionNames?: string[];
   totalSelections: number;
   avgResponseMs: number;
   fastestMs: number;
@@ -207,11 +211,21 @@ export default function AdminGameplayAnalyticsPage() {
   const [loading, setLoading] = useState(true);
   const [sessionId, setSessionId] = useState("all");
   const [selectedQuestionId, setSelectedQuestionId] = useState<string>("");
+  const [showOnlySessionQuestions, setShowOnlySessionQuestions] = useState(true);
   const [searchQuery, setSearchQuery] = useState("");
   const [livePolling, setLivePolling] = useState(true);
   const [activeTab, setActiveTab] = useState<
     "all" | "live_options" | "points_time" | "repeat_sessions" | "history"
   >("all");
+
+  // Support deep-linking ?sessionId=... from Sessions / Leaderboards pages
+  useEffect(() => {
+    if (typeof window !== "undefined") {
+      const sp = new URLSearchParams(window.location.search);
+      const sid = sp.get("sessionId");
+      if (sid) setSessionId(sid);
+    }
+  }, []);
 
   const fetchAnalytics = useCallback(
     async (silent = false) => {
@@ -225,11 +239,19 @@ export default function AdminGameplayAnalyticsPage() {
         });
         const json = (await res.json()) as GameplayAnalyticsResponse;
         setData(json);
-        if (!selectedQuestionId && json.questionBreakdown?.length > 0) {
-          const firstWithAnswers =
-            json.questionBreakdown.find((q) => q.totalSelections > 0) ??
-            json.questionBreakdown[0];
-          setSelectedQuestionId(firstWithAnswers.id);
+        if (json.questionBreakdown?.length > 0) {
+          const currentExists = json.questionBreakdown.some(
+            (q) => q.id === selectedQuestionId && (sessionId === "all" || !showOnlySessionQuestions || q.assignedToSession)
+          );
+          if (!currentExists) {
+            const firstAssigned =
+              json.questionBreakdown.find(
+                (q) => (sessionId === "all" || q.assignedToSession) && q.totalSelections > 0
+              ) ??
+              json.questionBreakdown.find((q) => sessionId === "all" || q.assignedToSession) ??
+              json.questionBreakdown[0];
+            if (firstAssigned) setSelectedQuestionId(firstAssigned.id);
+          }
         }
       } catch (err) {
         console.error("Failed to fetch gameplay analytics:", err);
@@ -237,7 +259,7 @@ export default function AdminGameplayAnalyticsPage() {
         if (!silent) setLoading(false);
       }
     },
-    [sessionId, searchQuery, selectedQuestionId]
+    [sessionId, searchQuery, selectedQuestionId, showOnlySessionQuestions]
   );
 
   useEffect(() => {
@@ -261,10 +283,43 @@ export default function AdminGameplayAnalyticsPage() {
     return `/api/admin/gameplay?${params.toString()}`;
   };
 
+  const sessionsList = data?.filters.sessions ?? [];
+  const currentSessionIndex = sessionsList.findIndex((s) => s.id === sessionId);
+
+  const handleStepSession = (dir: -1 | 1) => {
+    if (sessionsList.length === 0) return;
+    if (sessionId === "all") {
+      setSessionId(sessionsList[0].id);
+      return;
+    }
+    const nextIdx = (currentSessionIndex + dir + sessionsList.length) % sessionsList.length;
+    setSessionId(sessionsList[nextIdx].id);
+  };
+
+  const visibleQuestions = (data?.questionBreakdown ?? []).filter((q) => {
+    if (sessionId !== "all" && showOnlySessionQuestions) {
+      return q.assignedToSession !== false;
+    }
+    return true;
+  });
+
   const activeQuestion =
-    data?.questionBreakdown.find((q) => q.id === selectedQuestionId) ??
+    visibleQuestions.find((q) => q.id === selectedQuestionId) ??
+    visibleQuestions[0] ??
     data?.questionBreakdown[0] ??
     null;
+
+  const activeQuestionIndex = visibleQuestions.findIndex(
+    (q) => q.id === activeQuestion?.id
+  );
+
+  const handleStepQuestion = (dir: -1 | 1) => {
+    if (visibleQuestions.length === 0) return;
+    const nextIdx =
+      (Math.max(0, activeQuestionIndex) + dir + visibleQuestions.length) %
+      visibleQuestions.length;
+    setSelectedQuestionId(visibleQuestions[nextIdx].id);
+  };
 
   return (
     <div className="space-y-8 max-w-7xl mx-auto pb-12">
@@ -296,7 +351,7 @@ export default function AdminGameplayAnalyticsPage() {
             Gameplay Monitoring &amp; Analytics
           </h1>
           <p className="text-slate-400 text-sm mt-1">
-            Monitor real-time gameplay activity, option selections &amp; percentages, assigned points (10–1), response times, repeat plays, session comparisons, and export reports.
+            Step session-to-session or inspect the standalone Question Bank: 10 questions are assigned per 3-day session, and reusable across sessions.
           </p>
         </div>
 
@@ -323,8 +378,94 @@ export default function AdminGameplayAnalyticsPage() {
         </div>
       </div>
 
-      {/* ── Session Filter & Module Navigation Bar ── */}
-      <div className="rounded-2xl bg-[#0f1219] border border-white/10 p-4 flex flex-col md:flex-row items-stretch md:items-center justify-between gap-4">
+      {/* ── Session-to-Session Navigator Bar ── */}
+      <div className="rounded-2xl bg-[#0f1219] border border-white/10 p-4 space-y-3">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+          <div>
+            <span className="text-[11px] font-bold uppercase tracking-wider text-amber-400">
+              Session-to-Session Navigation
+            </span>
+            <p className="text-xs text-slate-400">
+              Navigate across 3-day tournament sessions (10 assigned questions per session) or view global Question Bank totals.
+            </p>
+          </div>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => handleStepSession(-1)}
+              className="px-3 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-bold text-slate-200"
+            >
+              ◀ Prev Session
+            </button>
+            <button
+              type="button"
+              onClick={() => handleStepSession(1)}
+              className="px-3 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-bold text-slate-200"
+            >
+              Next Session ▶
+            </button>
+            <button
+              type="button"
+              onClick={() => fetchAnalytics(false)}
+              className="px-3 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-semibold text-slate-300"
+            >
+              ↻ Refresh
+            </button>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2 overflow-x-auto pb-1">
+          <button
+            type="button"
+            onClick={() => setSessionId("all")}
+            className={`px-3.5 py-2 rounded-xl text-xs font-bold whitespace-nowrap border transition-colors ${
+              sessionId === "all"
+                ? "bg-amber-500 text-slate-950 border-amber-400"
+                : "bg-[#080b11] text-slate-300 border-white/10 hover:border-white/25"
+            }`}
+          >
+            All Sessions (Global Bank)
+          </button>
+          {sessionsList.map((s, idx) => {
+            const selected = sessionId === s.id;
+            const comp = data?.sessionComparison.find((c) => c.sessionId === s.id);
+            return (
+              <button
+                key={s.id}
+                type="button"
+                onClick={() => setSessionId(s.id)}
+                className={`px-3.5 py-2 rounded-xl text-left text-xs whitespace-nowrap border transition-colors flex items-center gap-2 ${
+                  selected
+                    ? "bg-amber-500/20 text-amber-300 border-amber-500/50 font-bold"
+                    : "bg-[#080b11] text-slate-300 border-white/10 hover:border-white/25"
+                }`}
+              >
+                <span className="font-mono text-[10px] text-slate-400">S{idx + 1}</span>
+                <span>{s.name}</span>
+                <span
+                  className={`px-1.5 py-0.5 rounded text-[10px] font-bold uppercase ${
+                    s.status === "active"
+                      ? "bg-emerald-500/20 text-emerald-300"
+                      : s.status === "completed"
+                      ? "bg-sky-500/20 text-sky-300"
+                      : "bg-white/10 text-slate-400"
+                  }`}
+                >
+                  {s.status}
+                </span>
+                {comp && (
+                  <span className="text-[10px] font-mono text-slate-400">
+                    ({comp.totalPlays} plays)
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* ── Module Navigation Bar ── */}
+      <div className="rounded-2xl bg-[#0f1219] border border-white/10 p-3.5 flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-2">
           {(
             [
@@ -350,31 +491,22 @@ export default function AdminGameplayAnalyticsPage() {
           ))}
         </div>
 
-        <div className="flex items-center gap-3">
-          <label htmlFor="session-slicer" className="text-xs font-semibold text-slate-400 shrink-0">
-            Session:
-          </label>
-          <select
-            id="session-slicer"
-            value={sessionId}
-            onChange={(e) => setSessionId(e.target.value)}
-            className="rounded-xl border border-white/10 bg-[#080b11] px-3.5 py-2 text-xs font-semibold text-white focus:border-amber-500 focus:outline-none"
-          >
-            <option value="all">All Game Sessions</option>
-            {(data?.filters.sessions ?? []).map((s) => (
-              <option key={s.id} value={s.id}>
-                {s.name} ({s.status.toUpperCase()})
-              </option>
-            ))}
-          </select>
-          <button
-            type="button"
-            onClick={() => fetchAnalytics(false)}
-            className="px-3 py-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-semibold text-slate-300"
-          >
-            ↻ Refresh
-          </button>
-        </div>
+        {sessionId !== "all" && (
+          <div className="flex items-center gap-2">
+            <a
+              href={`/admin/leaderboards?sessionId=${sessionId}`}
+              className="px-3 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-semibold text-amber-300"
+            >
+              Session Leaderboard ↗
+            </a>
+            <a
+              href={`/admin/winners?sessionId=${sessionId}`}
+              className="px-3 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-semibold text-emerald-300"
+            >
+              Session Winners ↗
+            </a>
+          </div>
+        )}
       </div>
 
       {loading && !data ? (
@@ -470,25 +602,101 @@ export default function AdminGameplayAnalyticsPage() {
                     <h2 className="text-xl font-bold text-white mt-0.5">
                       Question Option Selections, Percentages &amp; Live Points
                     </h2>
+                    {activeQuestion?.usedSessionNames && activeQuestion.usedSessionNames.length > 0 && (
+                      <p className="text-xs text-slate-400 mt-1">
+                        Assigned to <strong className="text-white">{activeQuestion.sessionsUsedCount}</strong>{" "}
+                        {activeQuestion.sessionsUsedCount === 1 ? "session" : "sessions"}:{" "}
+                        <span className="text-amber-300">{activeQuestion.usedSessionNames.join(" · ")}</span>
+                      </p>
+                    )}
                   </div>
 
-                  <div className="flex items-center gap-3">
-                    <label htmlFor="question-picker" className="text-xs font-semibold text-slate-400 shrink-0">
-                      Inspect Question:
-                    </label>
+                  <div className="flex flex-wrap items-center gap-2.5">
+                    {sessionId !== "all" && (
+                      <div className="inline-flex rounded-xl bg-[#080b11] border border-white/10 p-1">
+                        <button
+                          type="button"
+                          onClick={() => setShowOnlySessionQuestions(true)}
+                          className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-colors ${
+                            showOnlySessionQuestions
+                              ? "bg-amber-500 text-slate-950"
+                              : "text-slate-400 hover:text-white"
+                          }`}
+                        >
+                          Session&apos;s 10 Questions
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setShowOnlySessionQuestions(false)}
+                          className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-colors ${
+                            !showOnlySessionQuestions
+                              ? "bg-amber-500 text-slate-950"
+                              : "text-slate-400 hover:text-white"
+                          }`}
+                        >
+                          All Bank ({data.questionBreakdown.length})
+                        </button>
+                      </div>
+                    )}
+
                     <select
                       id="question-picker"
+                      aria-label="Inspect Question"
                       value={activeQuestion?.id ?? ""}
                       onChange={(e) => setSelectedQuestionId(e.target.value)}
                       className="max-w-md rounded-xl border border-white/10 bg-[#080b11] px-3.5 py-2 text-xs font-semibold text-white focus:border-amber-500 focus:outline-none"
                     >
-                      {data.questionBreakdown.map((q) => (
+                      {visibleQuestions.map((q, idx) => (
                         <option key={q.id} value={q.id}>
-                          [{q.category}] {q.title} ({q.totalSelections} selections)
+                          {q.sessionPosition != null ? `Q${q.sessionPosition}` : `#${idx + 1}`} [{q.category}]{" "}
+                          {q.title} ({q.totalSelections} picks)
                         </option>
                       ))}
                     </select>
                   </div>
+                </div>
+
+                {/* Question Stepper Bar (Q1 .. Q10) */}
+                <div className="flex items-center justify-between gap-2 bg-[#080b11] border border-white/5 rounded-xl p-2.5">
+                  <button
+                    type="button"
+                    onClick={() => handleStepQuestion(-1)}
+                    className="px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-xs font-bold text-slate-200 shrink-0"
+                  >
+                    ◀ Prev Q
+                  </button>
+
+                  <div className="flex items-center gap-1.5 overflow-x-auto py-0.5">
+                    {visibleQuestions.map((q, idx) => {
+                      const isCurr = q.id === activeQuestion?.id;
+                      const label = q.sessionPosition != null ? `Q${q.sessionPosition}` : `Q${idx + 1}`;
+                      return (
+                        <button
+                          key={q.id}
+                          type="button"
+                          onClick={() => setSelectedQuestionId(q.id)}
+                          title={`${q.category}: ${q.title}`}
+                          className={`px-2.5 py-1 rounded-lg text-xs font-mono font-bold transition-colors ${
+                            isCurr
+                              ? "bg-amber-500 text-slate-950"
+                              : q.totalSelections > 0
+                              ? "bg-emerald-500/15 text-emerald-300 border border-emerald-500/30 hover:bg-emerald-500/25"
+                              : "bg-white/5 text-slate-400 hover:text-white"
+                          }`}
+                        >
+                          {label}
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  <button
+                    type="button"
+                    onClick={() => handleStepQuestion(1)}
+                    className="px-3 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-xs font-bold text-slate-200 shrink-0"
+                  >
+                    Next Q ▶
+                  </button>
                 </div>
 
                 {activeQuestion && (

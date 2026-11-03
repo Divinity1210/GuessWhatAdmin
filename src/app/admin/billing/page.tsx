@@ -1,31 +1,36 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { createClientComponentClient } from "@/lib/supabase-browser";
+import { Radio, Send, CheckCircle2, RefreshCw } from "lucide-react";
 
-type SubscriptionRow = {
+type SubRow = {
   id: string;
-  msisdn: string;
-  carrier: string;
-  plan: string;
-  status: string;
+  msisdn?: string;
+  phone?: string;
+  carrier?: string | null;
+  telco?: string | null;
+  plan?: string;
+  plan_type?: string;
   coins_per_cycle: number;
-  provider: string;
-  provider_ref: string | null;
-  created_at: string;
+  price_naira?: number;
+  status: string;
+  next_billing_at?: string | null;
+  expires_at?: string | null;
+  profiles?: { username: string } | null;
 };
 
 type BillingEventRow = {
   id: number;
-  provider: string;
-  provider_event_id: string;
-  type: string;
-  signature_valid: boolean;
+  type?: string;
+  event_type?: string;
+  provider_event_id?: string | null;
+  telco_ref?: string | null;
   processed: boolean;
-  created_at: string;
+  created_at?: string;
+  received_at?: string;
 };
 
-type LedgerTxnRow = {
+type WalletTxRow = {
   id: number;
   type: string;
   coin_delta: number;
@@ -33,514 +38,300 @@ type LedgerTxnRow = {
   reference: string | null;
   note: string | null;
   created_at: string;
+  profiles?: { username: string } | null;
 };
 
-const FALLBACK_SUBS: SubscriptionRow[] = [
-  {
-    id: "sub-mtn-01",
-    msisdn: "+2348034419201",
-    carrier: "mtn",
-    plan: "weekly",
-    status: "active",
-    coins_per_cycle: 800,
-    provider: "mock",
-    provider_ref: "vas_mtn_eko_8821",
-    created_at: new Date(Date.now() - 3 * 3600_000).toISOString(),
-  },
-  {
-    id: "sub-airtel-02",
-    msisdn: "+2348029104432",
-    carrier: "airtel",
-    plan: "monthly",
-    status: "active",
-    coins_per_cycle: 4000,
-    provider: "mock",
-    provider_ref: "vas_airtel_abj_9102",
-    created_at: new Date(Date.now() - 8 * 3600_000).toISOString(),
-  },
-  {
-    id: "sub-glo-03",
-    msisdn: "+2348057721890",
-    carrier: "glo",
-    plan: "daily",
-    status: "active",
-    coins_per_cycle: 100,
-    provider: "mock",
-    provider_ref: "vas_glo_unilag_3319",
-    created_at: new Date(Date.now() - 14 * 3600_000).toISOString(),
-  },
-];
-
-const FALLBACK_EVENTS: BillingEventRow[] = [
-  {
-    id: 501,
-    provider: "mock",
-    provider_event_id: "evt_mtn_charge_8821",
-    type: "charge_success",
-    signature_valid: true,
-    processed: true,
-    created_at: new Date(Date.now() - 2 * 3600_000).toISOString(),
-  },
-  {
-    id: 500,
-    provider: "paystack",
-    provider_event_id: "PAYSTACK_WEEKLY_9182",
-    type: "charge_success",
-    signature_valid: true,
-    processed: true,
-    created_at: new Date(Date.now() - 5 * 3600_000).toISOString(),
-  },
-  {
-    id: 499,
-    provider: "mock",
-    provider_event_id: "evt_airtel_consent_9102",
-    type: "consent",
-    signature_valid: true,
-    processed: true,
-    created_at: new Date(Date.now() - 8 * 3600_000).toISOString(),
-  },
-];
-
-const FALLBACK_TXNS: LedgerTxnRow[] = [
-  {
-    id: 901,
-    type: "subscription_grant",
-    coin_delta: 800,
-    reward_delta: 0,
-    reference: "vas_mtn_eko_8821",
-    note: "MTN VAS (Weekly Baller Pack · ₦300)",
-    created_at: new Date(Date.now() - 2 * 3600_000).toISOString(),
-  },
-  {
-    id: 900,
-    type: "withdrawal",
-    coin_delta: 0,
-    reward_delta: -12500,
-    reference: "GW_PAYOUT_OPAY_7712",
-    note: "Payout to OPay (Paycom) (8034419201 · ADEBAYO OLUWASEUN)",
-    created_at: new Date(Date.now() - 6 * 3600_000).toISOString(),
-  },
-  {
-    id: 899,
-    type: "subscription_grant",
-    coin_delta: 4000,
-    reward_delta: 0,
-    reference: "PAYSTACK_MONTHLY_4410",
-    note: "Paystack Checkout (₦1,000)",
-    created_at: new Date(Date.now() - 9 * 3600_000).toISOString(),
-  },
-];
-
 export default function BillingPage() {
-  const [subs, setSubs] = useState<SubscriptionRow[]>(FALLBACK_SUBS);
-  const [events, setEvents] = useState<BillingEventRow[]>(FALLBACK_EVENTS);
-  const [txns, setTxns] = useState<LedgerTxnRow[]>(FALLBACK_TXNS);
-  const [activeTab, setActiveTab] = useState<"subs" | "webhooks" | "payouts" | "endpoints">("subs");
+  const [subscriptions, setSubscriptions] = useState<SubRow[]>([]);
+  const [events, setEvents] = useState<BillingEventRow[]>([]);
+  const [transactions, setTransactions] = useState<WalletTxRow[]>([]);
+  const [loading, setLoading] = useState(true);
 
-  // Simulator state
-  const [simType, setSimType] = useState("charge_success");
-  const [simMsisdn, setSimMsisdn] = useState("+2348034419201");
-  const [simCarrier, setSimCarrier] = useState("mtn");
-  const [simPlan, setSimPlan] = useState("weekly");
-  const [simResult, setSimResult] = useState<string | null>(null);
+  // Webhook Simulator State
+  const [simPhone, setSimPhone] = useState("08030001234");
+  const [simTelco, setSimTelco] = useState("MTN");
+  const [simEvent, setSimEvent] = useState("RENEWAL_SUCCESS");
+  const [simPlan, setSimPlan] = useState<"daily" | "weekly">("daily");
+  const [simSending, setSimSending] = useState(false);
+  const [simToast, setSimToast] = useState("");
 
-  const sb = createClientComponentClient();
+  async function loadBillingData() {
+    setLoading(true);
+    try {
+      const res = await fetch("/api/admin/billing", { cache: "no-store" });
+      const data = await res.json();
+      setSubscriptions((data.subscriptions as SubRow[]) ?? []);
+      setEvents((data.events as BillingEventRow[]) ?? []);
+      setTransactions((data.transactions as WalletTxRow[]) ?? []);
+    } finally {
+      setLoading(false);
+    }
+  }
 
   useEffect(() => {
-    async function load() {
-      try {
-        const [{ data: s }, { data: e }, { data: t }] = await Promise.all([
-          sb.from("subscriptions").select("*").order("created_at", { ascending: false }).limit(25),
-          sb.from("billing_events").select("*").order("created_at", { ascending: false }).limit(25),
-          sb
-            .from("wallet_transactions")
-            .select("*")
-            .in("type", ["subscription_grant", "withdrawal", "reward", "promo"])
-            .order("created_at", { ascending: false })
-            .limit(25),
-        ]);
-
-        if (s && s.length > 0) setSubs(s as SubscriptionRow[]);
-        if (e && e.length > 0) setEvents(e as BillingEventRow[]);
-        if (t && t.length > 0) setTxns(t as LedgerTxnRow[]);
-      } catch {
-        // Keep fallback rows when remote DB is paused
-      }
-    }
-    load();
+    loadBillingData();
   }, []);
 
-  const handleSimulateWebhook = () => {
-    const newEvtId = `evt_${simCarrier}_${simType}_${Date.now().toString().slice(-4)}`;
-    const newEvent: BillingEventRow = {
-      id: Date.now(),
-      provider: "mock",
-      provider_event_id: newEvtId,
-      type: simType,
-      signature_valid: true,
-      processed: true,
-      created_at: new Date().toISOString(),
-    };
-    setEvents((prev) => [newEvent, ...prev]);
+  async function handleSimulateWebhook(e: React.FormEvent) {
+    e.preventDefault();
+    setSimSending(true);
+    setSimToast("");
 
-    if (simType === "charge_success") {
-      const coins = simPlan === "daily" ? 100 : simPlan === "weekly" ? 800 : 4000;
-      const price = simPlan === "daily" ? 50 : simPlan === "weekly" ? 300 : 1000;
-      setTxns((prev) => [
-        {
-          id: Date.now() + 1,
-          type: "subscription_grant",
-          coin_delta: coins,
-          reward_delta: 0,
-          reference: newEvtId,
-          note: `${simCarrier.toUpperCase()} VAS Webhook (${simPlan} · ₦${price})`,
-          created_at: new Date().toISOString(),
-        },
-        ...prev,
-      ]);
+    try {
+      const res = await fetch("/api/admin/billing", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          phone: simPhone,
+          telco: simTelco,
+          eventType: simEvent,
+          planType: simPlan,
+        }),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        setSimToast(
+          `Webhook ${simEvent} (${data.telcoRef}) processed! ${
+            data.coinsCredited > 0
+              ? `+${data.coinsCredited} coins credited to @${data.username}.`
+              : "Subscription status updated."
+          }`
+        );
+        await loadBillingData();
+      }
+    } finally {
+      setSimSending(false);
     }
-
-    setSimResult(
-      `Webhook ${newEvtId} (${simType}) verified via HMAC-SHA256 and processed idempotently.`,
-    );
-  };
+  }
 
   return (
-    <div className="space-y-8 max-w-7xl mx-auto">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+    <div style={{ display: "flex", flexDirection: "column", gap: 24 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", flexWrap: "wrap", gap: 12 }}>
         <div>
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-amber-500/10 border border-amber-500/20 text-xs font-semibold text-amber-300 mb-2">
-            VAS & Paystack Billing
-          </div>
-          <h1 className="text-3xl font-extrabold text-white tracking-tight">
-            Billing, VAS & Payouts
-          </h1>
-          <p className="text-slate-400 text-sm mt-1">
-            MTN/Airtel/Glo/9mobile VAS subscriptions, Paystack/Flutterwave checkouts, and NUBAN
-            prize transfers.
+          <h1 style={{ fontSize: "1.6rem", fontWeight: 700 }}>VAS Billing & Subscriptions</h1>
+          <p style={{ color: "var(--muted)", fontSize: "0.875rem", marginTop: 4 }}>
+            Monitor telco subscription statuses, simulate live VAS aggregator webhooks, and audit wallet top-ups & payouts.
           </p>
         </div>
-
-        <div className="inline-flex items-center gap-2 px-4 py-2 rounded-2xl bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-xs font-bold">
-          <span className="size-2 rounded-full bg-emerald-400 animate-ping" />
-          <span>Gateways Active (VAS + Paystack + NUBAN)</span>
-        </div>
+        <button className="btn btn-ghost" onClick={loadBillingData}>
+          <RefreshCw size={14} /> Refresh Logs
+        </button>
       </div>
 
-      {/* KPI Cards */}
-      <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
-        <div className="wimbf-glass rounded-2xl p-5 space-y-1.5 border border-amber-500/20">
-          <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-            Coin Sales & VAS Revenue
-          </p>
-          <p className="text-2xl font-extrabold text-amber-400">₦482,650</p>
-          <p className="text-xs text-slate-500">MTN (58%) · Airtel (24%) · Paystack (18%)</p>
-        </div>
-
-        <div className="wimbf-glass rounded-2xl p-5 space-y-1.5 border border-emerald-500/20">
-          <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-            Prizes & Payouts Settled
-          </p>
-          <p className="text-2xl font-extrabold text-emerald-400">₦185,000</p>
-          <p className="text-xs text-slate-500">Instant NUBAN / OPay / PalmPay</p>
-        </div>
-
-        <div className="wimbf-glass rounded-2xl p-5 space-y-1.5 border border-sky-500/20">
-          <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-            Active VAS Subscriptions
-          </p>
-          <p className="text-2xl font-extrabold text-sky-400">{subs.length}</p>
-          <p className="text-xs text-slate-500">NCC Double Opt-In Verified</p>
-        </div>
-
-        <div className="wimbf-glass rounded-2xl p-5 space-y-1.5 border border-indigo-500/20">
-          <p className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-            Webhook Idempotency
-          </p>
-          <p className="text-2xl font-extrabold text-indigo-300">100% Valid</p>
-          <p className="text-xs text-slate-500">HMAC-SHA256 & SHA512 Enforced</p>
-        </div>
-      </div>
-
-      {/* Webhook Simulator Bar */}
-      <div className="wimbf-glass rounded-3xl p-6 border border-amber-500/25 space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-          <div>
-            <h2 className="text-base font-bold text-white">
-              Telco VAS & Paystack Webhook Test Console
-            </h2>
-            <p className="text-xs text-slate-400">
-              Fire a signed test webhook event to verify idempotent ledger crediting and
-              subscription state transitions.
-            </p>
+      {/* Live Telco VAS Webhook Simulator */}
+      <div className="card" style={{ borderColor: "rgba(245,200,66,0.35)", background: "linear-gradient(135deg, rgba(245,200,66,0.06), rgba(124,92,252,0.06))" }}>
+        <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14, flexWrap: "wrap", gap: 8 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <Radio size={18} color="#F5C842" />
+            <h2 style={{ fontWeight: 700, fontSize: "1rem" }}>Live VAS Telco Webhook Simulator (SDP / Aggregator Testbench)</h2>
           </div>
-          <span className="text-[11px] font-mono text-amber-300 bg-amber-500/10 border border-amber-500/20 px-3 py-1 rounded-full">
-            POST /api/vas/webhook
+          <span style={{ fontSize: "0.72rem", fontWeight: 700, color: "#F5C842", background: "rgba(245,200,66,0.12)", padding: "3px 10px", borderRadius: 99 }}>
+            Persists to Supabase & Credits Wallet
           </span>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-5 gap-3">
-          <select
-            value={simType}
-            onChange={(e) => setSimType(e.target.value)}
-            className="rounded-xl border border-white/10 bg-[#0e121b] px-3.5 py-2.5 text-xs font-semibold text-white"
-          >
-            <option value="charge_success">charge_success (Credit Coins)</option>
-            <option value="consent">consent (Opt-In Confirmed)</option>
-            <option value="charge_failed">charge_failed (Set Grace)</option>
-            <option value="cancel">cancel (Unsubscribe)</option>
-          </select>
-
-          <select
-            value={simCarrier}
-            onChange={(e) => setSimCarrier(e.target.value)}
-            className="rounded-xl border border-white/10 bg-[#0e121b] px-3.5 py-2.5 text-xs font-semibold text-white"
-          >
-            <option value="mtn">MTN Nigeria</option>
-            <option value="airtel">Airtel Nigeria</option>
-            <option value="glo">Glo Mobile</option>
-            <option value="9mobile">9mobile</option>
-          </select>
-
-          <select
-            value={simPlan}
-            onChange={(e) => setSimPlan(e.target.value)}
-            className="rounded-xl border border-white/10 bg-[#0e121b] px-3.5 py-2.5 text-xs font-semibold text-white"
-          >
-            <option value="daily">Daily (₦50 → 100 Coins)</option>
-            <option value="weekly">Weekly (₦300 → 800 Coins)</option>
-            <option value="monthly">Monthly (₦1,000 → 4,000 Coins)</option>
-          </select>
-
-          <input
-            type="text"
-            value={simMsisdn}
-            onChange={(e) => setSimMsisdn(e.target.value)}
-            className="rounded-xl border border-white/10 bg-white/[0.03] px-3.5 py-2.5 text-xs text-white"
-            placeholder="+234803..."
-          />
-
-          <button
-            type="button"
-            onClick={handleSimulateWebhook}
-            className="rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs px-4 py-2.5 transition-all"
-          >
-            ⚡ Fire Signed Webhook
-          </button>
-        </div>
-
-        {simResult && (
-          <div className="rounded-xl border border-emerald-500/30 bg-emerald-500/10 px-4 py-2.5 text-xs font-semibold text-emerald-300 flex items-center justify-between">
-            <span>{simResult}</span>
-            <button
-              type="button"
-              onClick={() => setSimResult(null)}
-              className="text-emerald-200 hover:text-white"
+        <form onSubmit={handleSimulateWebhook} className="grid-4" style={{ alignItems: "end" }}>
+          <div>
+            <label className="form-label" htmlFor="sim-phone">Subscriber MSISDN</label>
+            <input
+              id="sim-phone"
+              name="phone"
+              type="tel"
+              inputMode="tel"
+              className="form-input"
+              value={simPhone}
+              onChange={(e) => setSimPhone(e.target.value)}
+              placeholder="08030001234"
+            />
+          </div>
+          <div>
+            <label className="form-label" htmlFor="sim-telco">Telco Operator</label>
+            <select id="sim-telco" name="telco" className="form-select" value={simTelco} onChange={(e) => setSimTelco(e.target.value)}>
+              <option value="MTN">MTN Nigeria (*555*1#)</option>
+              <option value="Airtel">Airtel NG (*555*2#)</option>
+              <option value="Glo">Glo Mobile (*555*3#)</option>
+              <option value="9mobile">9mobile (*555*4#)</option>
+            </select>
+          </div>
+          <div>
+            <label className="form-label" htmlFor="sim-event">Webhook Event Type</label>
+            <select id="sim-event" name="eventType" className="form-select" value={simEvent} onChange={(e) => setSimEvent(e.target.value)}>
+              <option value="SUBSCRIPTION_CREATED">SUBSCRIPTION_CREATED (+100 🪙)</option>
+              <option value="RENEWAL_SUCCESS">RENEWAL_SUCCESS (+100 🪙)</option>
+              <option value="RENEWAL_FAILED">RENEWAL_FAILED (Low Airtime)</option>
+              <option value="UNSUBSCRIBED">UNSUBSCRIBED (STOP SMS)</option>
+            </select>
+          </div>
+          <div style={{ display: "flex", gap: 8 }}>
+            <select
+              aria-label="Billing Plan Cycle"
+              className="form-select"
+              style={{ width: 120 }}
+              value={simPlan}
+              onChange={(e) => setSimPlan(e.target.value as "daily" | "weekly")}
             >
-              Dismiss
+              <option value="daily">Daily ₦100</option>
+              <option value="weekly">Weekly ₦300</option>
+            </select>
+            <button type="submit" className="btn btn-primary" disabled={simSending} style={{ flex: 1, justifyContent: "center" }}>
+              <Send size={14} /> {simSending ? "Firing..." : "Fire Signed Webhook"}
             </button>
+          </div>
+        </form>
+
+        {simToast && (
+          <div
+            role="status"
+            aria-live="polite"
+            style={{
+              marginTop: 14, padding: "10px 14px", borderRadius: 8,
+              background: "rgba(0,229,160,0.1)", border: "1px solid rgba(0,229,160,0.3)",
+              display: "flex", alignItems: "center", gap: 8, color: "#00E5A0", fontSize: "0.82rem", fontWeight: 600,
+            }}
+          >
+            <CheckCircle2 size={16} /> {simToast}
           </div>
         )}
       </div>
 
-      {/* Navigation Tabs */}
-      <div className="wimbf-glass rounded-2xl p-2 inline-flex flex-wrap gap-1">
-        {[
-          { id: "subs", label: `VAS Subscriptions (${subs.length})` },
-          { id: "webhooks", label: `Webhook Feed (${events.length})` },
-          { id: "payouts", label: `Wallet & Payout Ledger (${txns.length})` },
-          { id: "endpoints", label: "Live API Endpoints" },
-        ].map((t) => (
-          <button
-            key={t.id}
-            onClick={() => setActiveTab(t.id as typeof activeTab)}
-            className={`px-4 py-2 rounded-xl text-xs font-semibold uppercase tracking-wider transition-all ${
-              activeTab === t.id
-                ? "bg-amber-500/20 text-amber-300 border border-amber-500/40"
-                : "text-slate-400 hover:text-slate-200"
-            }`}
-          >
-            {t.label}
-          </button>
-        ))}
+      {/* Active Subscriptions */}
+      <div className="card" style={{ padding: 0 }}>
+        <div style={{ padding: "16px 20px", borderBottom: "1px solid var(--border)" }}>
+          <h2 style={{ fontWeight: 700, fontSize: "1rem" }}>Subscriptions ({subscriptions.length})</h2>
+        </div>
+        {loading ? (
+          <p style={{ padding: 24, color: "var(--muted)" }}>Loading subscriptions...</p>
+        ) : subscriptions.length === 0 ? (
+          <p style={{ padding: 24, color: "var(--muted)" }}>
+            No subscriptions yet. Use the Live VAS Telco Webhook Simulator above to test a subscription event!
+          </p>
+        ) : (
+          <div className="table-wrap" role="region" tabIndex={0} aria-label="VAS Subscriptions">
+            <table>
+              <thead>
+                <tr>
+                  <th>Player</th>
+                  <th>Phone</th>
+                  <th>Telco</th>
+                  <th>Plan</th>
+                  <th>Coins/Cycle</th>
+                  <th>Price</th>
+                  <th>Status</th>
+                  <th>Expires</th>
+                </tr>
+              </thead>
+              <tbody>
+                {subscriptions.map((s) => (
+                  <tr key={s.id}>
+                    <td style={{ fontWeight: 600 }}>@{s.profiles?.username ?? "—"}</td>
+                    <td>{s.msisdn ?? s.phone ?? "—"}</td>
+                    <td style={{ textTransform: "uppercase" }}>{s.carrier ?? s.telco ?? "—"}</td>
+                    <td style={{ textTransform: "capitalize" }}>{s.plan ?? s.plan_type ?? "daily"}</td>
+                    <td style={{ color: "var(--accent-gold)", fontWeight: 600 }}>{s.coins_per_cycle} 🪙</td>
+                    <td>₦{s.price_naira ?? (s.plan === "weekly" ? 300 : 100)}</td>
+                    <td><span className={`badge badge-${s.status === "active" ? "active" : "cancelled"}`}>{s.status}</span></td>
+                    <td style={{ color: "var(--muted)", fontSize: "0.78rem" }}>
+                      {(s.next_billing_at ?? s.expires_at)
+                        ? new Date((s.next_billing_at ?? s.expires_at)!).toLocaleDateString("en-NG")
+                        : "—"}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
 
-      {/* Tab Content */}
-      {activeTab === "subs" && (
-        <div className="wimbf-glass rounded-3xl overflow-hidden border border-white/5">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
+      {/* Wallet Top-ups & Bank Payout Ledger */}
+      <div className="card" style={{ padding: 0 }}>
+        <div style={{ padding: "16px 20px", borderBottom: "1px solid var(--border)" }}>
+          <h2 style={{ fontWeight: 700, fontSize: "1rem" }}>Recent Coin Top-ups & Bank Withdrawals</h2>
+        </div>
+        {transactions.length === 0 ? (
+          <p style={{ padding: 24, color: "var(--muted)" }}>No wallet transactions recorded yet.</p>
+        ) : (
+          <div className="table-wrap" role="region" tabIndex={0} aria-label="Recent Coin Top-ups and Bank Withdrawals">
+            <table>
               <thead>
-                <tr className="border-b border-white/5 bg-white/[0.02] text-[11px] font-semibold uppercase tracking-widest text-slate-400">
-                  <th className="px-6 py-4">MSISDN</th>
-                  <th className="px-6 py-4">Carrier</th>
-                  <th className="px-6 py-4">Plan</th>
-                  <th className="px-6 py-4">Coins / Cycle</th>
-                  <th className="px-6 py-4">Provider Ref</th>
-                  <th className="px-6 py-4">Status</th>
+                <tr>
+                  <th>Player</th>
+                  <th>Type</th>
+                  <th>Coin Delta</th>
+                  <th>Cash Delta</th>
+                  <th>Reference</th>
+                  <th>Note</th>
+                  <th>Timestamp</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-white/5">
-                {subs.map((s) => (
-                  <tr key={s.id} className="hover:bg-white/[0.02]">
-                    <td className="px-6 py-4 font-mono text-xs text-white">{s.msisdn}</td>
-                    <td className="px-6 py-4 uppercase text-xs font-bold text-amber-300">
-                      {s.carrier}
-                    </td>
-                    <td className="px-6 py-4 capitalize text-xs text-slate-300">{s.plan}</td>
-                    <td className="px-6 py-4 font-bold text-emerald-400">
-                      +{s.coins_per_cycle.toLocaleString()}
-                    </td>
-                    <td className="px-6 py-4 font-mono text-xs text-slate-400">
-                      {s.provider_ref ?? "—"}
-                    </td>
-                    <td className="px-6 py-4">
-                      <span className="px-2.5 py-1 rounded-full text-[10px] font-bold uppercase bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
-                        {s.status}
+              <tbody>
+                {transactions.map((tx) => (
+                  <tr key={tx.id}>
+                    <td style={{ fontWeight: 600 }}>@{tx.profiles?.username ?? "player"}</td>
+                    <td>
+                      <span className={`badge ${tx.type === "withdrawal" ? "badge-pending" : "badge-active"}`}>
+                        {tx.type}
                       </span>
                     </td>
+                    <td style={{ fontWeight: 600, color: tx.coin_delta > 0 ? "var(--accent-gold)" : "var(--muted)" }}>
+                      {tx.coin_delta > 0 ? `+${tx.coin_delta} 🪙` : tx.coin_delta < 0 ? `${tx.coin_delta} 🪙` : "—"}
+                    </td>
+                    <td style={{ fontWeight: 600, color: tx.reward_delta < 0 ? "var(--danger)" : tx.reward_delta > 0 ? "var(--accent)" : "var(--muted)" }}>
+                      {tx.reward_delta !== 0
+                        ? `${tx.reward_delta > 0 ? "+" : "-"}₦${Math.abs(Number(tx.reward_delta)).toLocaleString()}`
+                        : "—"}
+                    </td>
+                    <td><code style={{ fontSize: "0.75rem", color: "var(--muted)" }}>{tx.reference ?? "—"}</code></td>
+                    <td style={{ fontSize: "0.8rem" }}>{tx.note ?? "—"}</td>
+                    <td style={{ color: "var(--muted)", fontSize: "0.78rem" }}>
+                      {new Date(tx.created_at).toLocaleString("en-NG", { dateStyle: "short", timeStyle: "short" })}
+                    </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-        </div>
-      )}
+        )}
+      </div>
 
-      {activeTab === "webhooks" && (
-        <div className="wimbf-glass rounded-3xl overflow-hidden border border-white/5">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
+      {/* Billing Webhook Events Log */}
+      <div className="card" style={{ padding: 0 }}>
+        <div style={{ padding: "16px 20px", borderBottom: "1px solid var(--border)" }}>
+          <h2 style={{ fontWeight: 700, fontSize: "1rem" }}>Recent Webhook Events</h2>
+        </div>
+        {events.length === 0 ? (
+          <p style={{ padding: 24, color: "var(--muted)" }}>No billing events received yet.</p>
+        ) : (
+          <div className="table-wrap" role="region" tabIndex={0} aria-label="Recent Webhook Events">
+            <table>
               <thead>
-                <tr className="border-b border-white/5 bg-white/[0.02] text-[11px] font-semibold uppercase tracking-widest text-slate-400">
-                  <th className="px-6 py-4">Event ID</th>
-                  <th className="px-6 py-4">Gateway</th>
-                  <th className="px-6 py-4">Event Type</th>
-                  <th className="px-6 py-4">HMAC Signature</th>
-                  <th className="px-6 py-4">Timestamp</th>
+                <tr>
+                  <th>Event Type</th>
+                  <th>Telco Ref</th>
+                  <th>Processed</th>
+                  <th>Received</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-white/5">
-                {events.map((e) => (
-                  <tr key={e.id} className="hover:bg-white/[0.02]">
-                    <td className="px-6 py-4 font-mono text-xs text-white">
-                      {e.provider_event_id}
-                    </td>
-                    <td className="px-6 py-4 uppercase text-xs font-bold text-sky-300">
-                      {e.provider}
-                    </td>
-                    <td className="px-6 py-4 text-xs font-semibold text-amber-300">{e.type}</td>
-                    <td className="px-6 py-4">
-                      <span className="px-2.5 py-1 rounded-full text-[10px] font-bold uppercase bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
-                        {e.signature_valid ? "Verified" : "Invalid"}
+              <tbody>
+                {events.map((ev) => (
+                  <tr key={ev.id}>
+                    <td style={{ fontWeight: 600 }}>{ev.type ?? ev.event_type}</td>
+                    <td><code style={{ fontSize: "0.78rem" }}>{ev.provider_event_id ?? ev.telco_ref ?? "—"}</code></td>
+                    <td>
+                      <span className={`badge ${ev.processed ? "badge-published" : "badge-pending"}`}>
+                        {ev.processed ? "Processed" : "Pending"}
                       </span>
                     </td>
-                    <td className="px-6 py-4 text-xs text-slate-400">
-                      {new Date(e.created_at).toLocaleString("en-NG")}
+                    <td style={{ color: "var(--muted)", fontSize: "0.78rem" }}>
+                      {new Date((ev.created_at ?? ev.received_at)!).toLocaleString("en-NG", { dateStyle: "short", timeStyle: "short" })}
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-        </div>
-      )}
-
-      {activeTab === "payouts" && (
-        <div className="wimbf-glass rounded-3xl overflow-hidden border border-white/5">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead>
-                <tr className="border-b border-white/5 bg-white/[0.02] text-[11px] font-semibold uppercase tracking-widest text-slate-400">
-                  <th className="px-6 py-4">Type</th>
-                  <th className="px-6 py-4">Coins Delta</th>
-                  <th className="px-6 py-4">Naira Delta</th>
-                  <th className="px-6 py-4">Reference</th>
-                  <th className="px-6 py-4">Details</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-white/5">
-                {txns.map((t) => (
-                  <tr key={t.id} className="hover:bg-white/[0.02]">
-                    <td className="px-6 py-4 text-xs font-bold uppercase text-slate-200">
-                      {t.type.replace("_", " ")}
-                    </td>
-                    <td className="px-6 py-4 font-bold text-amber-400">
-                      {t.coin_delta !== 0
-                        ? `${t.coin_delta > 0 ? "+" : ""}${t.coin_delta.toLocaleString()}`
-                        : "—"}
-                    </td>
-                    <td
-                      className={`px-6 py-4 font-bold ${
-                        t.reward_delta < 0 ? "text-rose-400" : "text-emerald-400"
-                      }`}
-                    >
-                      {t.reward_delta !== 0
-                        ? `${t.reward_delta > 0 ? "+" : "-"}₦${Math.abs(t.reward_delta).toLocaleString()}`
-                        : "—"}
-                    </td>
-                    <td className="px-6 py-4 font-mono text-xs text-slate-400">
-                      {t.reference ?? "—"}
-                    </td>
-                    <td className="px-6 py-4 text-xs text-slate-300">{t.note ?? "—"}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
-
-      {activeTab === "endpoints" && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-          {[
-            {
-              method: "POST",
-              path: "/api/vas/initiate",
-              title: "Telco VAS Subscription Initiation",
-              desc: "Normalizes Nigerian MSISDN (+234), detects carrier (MTN/Airtel/Glo/9mobile), and initiates NCC double opt-in OTP consent.",
-            },
-            {
-              method: "POST",
-              path: "/api/vas/confirm",
-              title: "Telco VAS OTP Confirmation",
-              desc: "Confirms 4-digit SMS OTP, activates subscription cycle, logs billing_events row, and credits coins to player wallet.",
-            },
-            {
-              method: "POST",
-              path: "/api/vas/webhook",
-              title: "Telco Aggregator Webhook Receiver",
-              desc: "Verifies x-vas-signature (HMAC-SHA256), enforces idempotency on provider_event_id, and processes renewals/cancellations.",
-            },
-            {
-              method: "POST",
-              path: "/api/payments/paystack",
-              title: "Paystack & Flutterwave Checkout + Webhook",
-              desc: "Initializes Naira Card/Transfer/OPay checkouts and verifies x-paystack-signature (HMAC-SHA512) charge.success webhooks.",
-            },
-            {
-              method: "GET / POST",
-              path: "/api/payouts",
-              title: "NUBAN Bank Account Resolution & Prize Transfer",
-              desc: "Resolves 10-digit Nigerian account numbers (OPay, PalmPay, Moniepoint, GTBank, Access, Zenith) and executes instant prize transfers.",
-            },
-          ].map((ep) => (
-            <div
-              key={ep.path}
-              className="wimbf-glass rounded-2xl p-5 border border-white/10 space-y-2"
-            >
-              <div className="flex items-center justify-between">
-                <span className="px-2.5 py-1 rounded-lg bg-amber-500/15 text-amber-300 border border-amber-500/30 font-mono text-xs font-bold">
-                  {ep.method}
-                </span>
-                <code className="font-mono text-xs text-emerald-400">{ep.path}</code>
-              </div>
-              <h3 className="font-bold text-white text-sm pt-1">{ep.title}</h3>
-              <p className="text-xs text-slate-400 leading-relaxed">{ep.desc}</p>
-            </div>
-          ))}
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }

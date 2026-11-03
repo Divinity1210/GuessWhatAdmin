@@ -1,402 +1,806 @@
 "use client";
 
-import { useEffect, useState } from "react";
-import { createClientComponentClient } from "@/lib/supabase-browser";
+import { useState, useEffect, useCallback } from "react";
+import Link from "next/link";
+
+type AssignedQuestion = {
+  position: number;
+  question_id: string;
+  title: string;
+  category: string;
+  type: string;
+  option_count: number;
+  guesses_count: number;
+};
+
+type PrizeTier = {
+  rank_from: number;
+  rank_to: number;
+  amount: number;
+};
 
 type Session = {
   id: string;
   name: string;
-  status: string;
+  status: "upcoming" | "active" | "scoring" | "completed" | "cancelled";
+  is_paused?: boolean;
   starts_at: string;
   ends_at: string;
   entry_fee_coins: number;
   prize_pool: number;
-  prize_structure: { rank_from: number; rank_to: number; amount: number }[];
+  prize_structure?: PrizeTier[];
+  participating_players?: number;
+  total_plays?: number;
+  repeat_plays?: number;
+  guesses_submitted?: number;
+  assigned_questions?: AssignedQuestion[];
 };
 
-type PublishedQuestion = {
+type Question = {
   id: string;
   title: string;
   category: string;
+  type: string;
 };
+
+function formatCountdown(startsAt: string, endsAt: string, status: string, isPaused?: boolean): string {
+  if (status === "completed") return "Completed";
+  if (isPaused) return "Paused by Admin";
+  const now = Date.now();
+  const start = new Date(startsAt).getTime();
+  const end = new Date(endsAt).getTime();
+
+  if (status === "upcoming" && start > now) {
+    const diff = start - now;
+    const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+    const hrs = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+    return `Starts in ${days}d ${String(hrs).padStart(2, "0")}h`;
+  }
+
+  const diff = end - now;
+  if (diff <= 0) return "Window Ended (Ready to Score)";
+  const days = Math.floor(diff / (1000 * 60 * 60 * 24));
+  const hrs = Math.floor((diff % (1000 * 60 * 60 * 24)) / (1000 * 60 * 60));
+  const mins = Math.floor((diff % (1000 * 60 * 60)) / (1000 * 60));
+  if (days > 0) return `${days}d ${String(hrs).padStart(2, "0")}h remaining`;
+  return `${hrs}h ${String(mins).padStart(2, "0")}m remaining`;
+}
 
 export default function SessionsPage() {
   const [sessions, setSessions] = useState<Session[]>([]);
-  const [questions, setQuestions] = useState<PublishedQuestion[]>([]);
+  const [publishedQuestions, setPublishedQuestions] = useState<Question[]>([]);
   const [loading, setLoading] = useState(true);
-  const [showCreate, setShowCreate] = useState(false);
-  const [tab, setTab] = useState("all");
+  const [tabFilter, setTabFilter] = useState<"all" | "active" | "upcoming" | "completed">("all");
+  const [expandedSessionId, setExpandedSessionId] = useState<string | null>(null);
 
-  // Create form
-  const [name, setName] = useState("");
+  // Create / Edit Modal state
+  const [showModal, setShowModal] = useState(false);
+  const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
+  const [name, setName] = useState("Weekend Crowd Challenge");
   const [startsAt, setStartsAt] = useState("");
   const [endsAt, setEndsAt] = useState("");
-  const [entryFee, setEntryFee] = useState(100);
-  const [prizePool, setPrizePool] = useState(5000);
-  const [selectedQuestions, setSelectedQuestions] = useState<string[]>([]);
-  const [creating, setCreating] = useState(false);
+  const [entryFee, setEntryFee] = useState("0");
+  const [prizePool, setPrizePool] = useState("500000");
+  const [prizePreset, setPrizePreset] = useState<"36_winners" | "49_winners">("36_winners");
+  const [initialStatus, setInitialStatus] = useState<"active" | "upcoming">("active");
+  const [selectedQuestionIds, setSelectedQuestionIds] = useState<string[]>([]);
+  const [saving, setSaving] = useState(false);
+  const [busySessionId, setBusySessionId] = useState<string | null>(null);
+  const [error, setError] = useState("");
+  const [toast, setToast] = useState("");
 
-  const sb = createClientComponentClient();
+  const showToastMsg = (msg: string) => {
+    setToast(msg);
+    setTimeout(() => setToast(""), 5000);
+  };
 
-  async function loadData() {
+  const load = useCallback(async () => {
     setLoading(true);
-    const [{ data: s }, { data: q }] = await Promise.all([
-      sb.from("game_sessions").select("*").order("created_at", { ascending: false }).limit(50),
-      sb.from("questions").select("id, title, category").eq("status", "published"),
-    ]);
-    setSessions((s ?? []) as Session[]);
-    setQuestions((q ?? []) as PublishedQuestion[]);
-    setLoading(false);
-  }
-
-  useEffect(() => {
-    loadData();
+    try {
+      const res = await fetch("/api/admin/sessions", { cache: "no-store" });
+      const data = await res.json();
+      setSessions((data.sessions as Session[]) ?? []);
+      setPublishedQuestions((data.publishedQuestions as Question[]) ?? []);
+    } catch {
+      setError("Failed to load sessions.");
+    } finally {
+      setLoading(false);
+    }
   }, []);
 
-  const handleCreate = async (e: React.FormEvent) => {
+  useEffect(() => {
+    load();
+    const now = new Date();
+    const start = new Date(now.getTime() - 60 * 60 * 1000);
+    const end = new Date(now.getTime() + 72 * 60 * 60 * 1000);
+    setStartsAt(start.toISOString().slice(0, 16));
+    setEndsAt(end.toISOString().slice(0, 16));
+  }, [load]);
+
+  function openCreateModal() {
+    setEditingSessionId(null);
+    setName(`Guess What Session #${sessions.length + 1}`);
+    const now = new Date();
+    const start = new Date(now.getTime());
+    const end = new Date(now.getTime() + 72 * 60 * 60 * 1000);
+    setStartsAt(start.toISOString().slice(0, 16));
+    setEndsAt(end.toISOString().slice(0, 16));
+    setEntryFee("0");
+    setPrizePool("500000");
+    setPrizePreset("36_winners");
+    setInitialStatus("active");
+    setSelectedQuestionIds(publishedQuestions.slice(0, 10).map((q) => q.id));
+    setError("");
+    setShowModal(true);
+  }
+
+  function openEditModal(s: Session) {
+    setEditingSessionId(s.id);
+    setName(s.name);
+    setStartsAt(s.starts_at ? new Date(s.starts_at).toISOString().slice(0, 16) : "");
+    setEndsAt(s.ends_at ? new Date(s.ends_at).toISOString().slice(0, 16) : "");
+    setEntryFee(String(s.entry_fee_coins ?? 0));
+    setPrizePool(String(s.prize_pool ?? 500000));
+    const maxRank = Math.max(
+      ...(s.prize_structure ?? []).map((t) => Number(t.rank_to ?? 0)),
+      36
+    );
+    setPrizePreset(maxRank >= 49 ? "49_winners" : "36_winners");
+    setInitialStatus(s.status === "upcoming" ? "upcoming" : "active");
+    setSelectedQuestionIds(
+      (s.assigned_questions ?? []).map((aq) => aq.question_id)
+    );
+    setError("");
+    setShowModal(true);
+  }
+
+  function toggleQuestion(id: string) {
+    setSelectedQuestionIds((prev) =>
+      prev.includes(id) ? prev.filter((q) => q !== id) : [...prev, id]
+    );
+  }
+
+  function autoPick10Questions() {
+    setSelectedQuestionIds(publishedQuestions.slice(0, 10).map((q) => q.id));
+  }
+
+  async function handleSaveSession(e: React.FormEvent) {
     e.preventDefault();
-    if (!name.trim() || !startsAt || !endsAt || selectedQuestions.length === 0) return;
-    setCreating(true);
-
-    const prizeStructure = [
-      { rank_from: 1, rank_to: 1, amount: Math.round(prizePool * 0.4) },
-      { rank_from: 2, rank_to: 2, amount: Math.round(prizePool * 0.2) },
-      { rank_from: 3, rank_to: 3, amount: Math.round(prizePool * 0.1) },
-      { rank_from: 4, rank_to: 10, amount: Math.round(prizePool * 0.03) },
-    ];
-
-    const { data: sess, error } = await sb
-      .from("game_sessions")
-      .insert({
-        name: name.trim(),
-        starts_at: new Date(startsAt).toISOString(),
-        ends_at: new Date(endsAt).toISOString(),
-        entry_fee_coins: entryFee,
-        prize_pool: prizePool,
-        prize_structure: prizeStructure,
-        status: "upcoming",
-      })
-      .select("id")
-      .single();
-
-    if (error) {
-      alert(error.message);
-      setCreating(false);
+    setError("");
+    if (!name.trim() || !startsAt || !endsAt) {
+      setError("Session name, start date/time, and end date/time are required.");
+      return;
+    }
+    if (selectedQuestionIds.length < 1) {
+      setError("Please select questions for this session (standard is 10 questions).");
       return;
     }
 
-    // Link questions
-    const { error: sqErr } = await sb.from("session_questions").insert(
-      selectedQuestions.map((qid, i) => ({
-        session_id: sess.id,
-        question_id: qid,
-        position: i,
-      }))
-    );
-    if (sqErr) alert(sqErr.message);
+    setSaving(true);
+    try {
+      if (editingSessionId) {
+        const res = await fetch("/api/admin/sessions", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            id: editingSessionId,
+            action: "edit_session",
+            name: name.trim(),
+            startsAt,
+            endsAt,
+            entryFee: Number(entryFee),
+            prizePool: Number(prizePool),
+            prizePreset,
+            status: initialStatus,
+            selectedQuestionIds,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          setError(data.error || "Failed to update session.");
+          setSaving(false);
+          return;
+        }
+        showToastMsg(`Session "${name}" updated with ${selectedQuestionIds.length} questions!`);
+      } else {
+        const res = await fetch("/api/admin/sessions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            name: name.trim(),
+            startsAt,
+            endsAt,
+            entryFee: Number(entryFee),
+            prizePool: Number(prizePool),
+            prizePreset,
+            status: initialStatus,
+            selectedQuestionIds,
+          }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          setError(data.error || "Failed to create session.");
+          setSaving(false);
+          return;
+        }
+        showToastMsg(`Session "${name}" created with ${selectedQuestionIds.length} questions!`);
+      }
 
-    setShowCreate(false);
-    setName("");
-    setStartsAt("");
-    setEndsAt("");
-    setSelectedQuestions([]);
-    setCreating(false);
-    loadData();
-  };
+      setShowModal(false);
+      await load();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Failed to save session.");
+    } finally {
+      setSaving(false);
+    }
+  }
 
-  const updateStatus = async (id: string, status: string) => {
-    await sb.from("game_sessions").update({ status }).eq("id", id);
-    loadData();
-  };
+  async function handleSessionAction(id: string, action: "start" | "pause" | "resume" | "close_and_score") {
+    setBusySessionId(id);
+    setError("");
+    try {
+      const res = await fetch("/api/admin/sessions", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, action }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error || "Failed to perform session action.");
+      } else {
+        if (action === "close_and_score") {
+          showToastMsg("Session ended, consensus points (10–1) calculated, and final leaderboard & winners published!");
+        } else if (action === "pause") {
+          showToastMsg("Session paused.");
+        } else {
+          showToastMsg("Session is now live and accepting player guesses!");
+        }
+      }
+      await load();
+    } finally {
+      setBusySessionId(null);
+    }
+  }
 
-  const closeSession = async (id: string) => {
-    if (!confirm("Close this session? This will calculate scores and pay out prizes.")) return;
-    const { error } = await sb.rpc("close_session", { p_session_id: id });
-    if (error) alert(error.message);
-    else loadData();
-  };
+  const filteredSessions = sessions.filter((s) => {
+    if (tabFilter === "all") return true;
+    if (tabFilter === "active") return s.status === "active";
+    if (tabFilter === "upcoming") return s.status === "upcoming";
+    if (tabFilter === "completed") return s.status === "completed";
+    return true;
+  });
 
-  const filtered = tab === "all" ? sessions : sessions.filter((s) => s.status === tab);
-
-  const statusBadgeStyle: Record<string, string> = {
-    upcoming: "bg-sky-500/15 text-sky-300 border-sky-500/30",
-    active: "bg-rose-500/20 text-rose-300 border-rose-500/40 shadow-[0_0_15px_rgba(244,63,94,0.25)] animate-pulse",
-    closing: "bg-amber-500/15 text-amber-300 border-amber-500/30",
-    completed: "bg-slate-500/10 text-slate-400 border-slate-500/20",
-  };
+  const activeCount = sessions.filter((s) => s.status === "active").length;
+  const upcomingCount = sessions.filter((s) => s.status === "upcoming").length;
+  const completedCount = sessions.filter((s) => s.status === "completed").length;
 
   return (
     <div className="space-y-8 max-w-7xl mx-auto">
       {/* Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-white/10 pb-6">
         <div>
-          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-violet-500/10 border border-violet-500/20 text-xs font-semibold text-violet-300 mb-2">
-            Game Operations
-          </div>
-          <h1 className="text-3xl font-extrabold text-white tracking-tight">Game Sessions</h1>
+          <span className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-500/15 border border-indigo-500/30 text-xs font-semibold text-indigo-300 mb-2">
+            Page 37 · Game Session Management
+          </span>
+          <h1 className="text-3xl font-extrabold text-white tracking-tight">
+            Game Sessions &amp; 10-Question Assignments
+          </h1>
           <p className="text-slate-400 text-sm mt-1">
-            Build game sessions, attach question rosters, and launch live runs.
+            Create, edit, start, pause, and end 3-day game sessions, assign 10 crowd questions, and publish final consensus scores.
           </p>
         </div>
 
         <button
-          onClick={() => setShowCreate(!showCreate)}
-          className="inline-flex items-center gap-2 px-5 py-3 rounded-2xl bg-violet-600 hover:bg-violet-500 text-white font-semibold text-sm transition-all duration-200 hover:scale-[1.02]"
+          onClick={openCreateModal}
+          className="inline-flex items-center gap-2 px-5 py-3 rounded-2xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-sm transition-all shrink-0"
         >
-          <span>{showCreate ? "Close Drawer" : "+ Create Session"}</span>
+          <span>+ Create New Game Session</span>
         </button>
       </div>
 
-      {/* Creation Drawer */}
-      {showCreate && (
-        <form
-          onSubmit={handleCreate}
-          className="wimbf-glass rounded-3xl p-6 md:p-8 space-y-6 border border-violet-500/30 shadow-2xl animate-fade-in"
-        >
-          <div className="flex items-center justify-between border-b border-white/5 pb-4">
-            <div>
-              <h2 className="text-lg font-bold text-white">Create Game Session</h2>
-              <p className="text-xs text-slate-400">Configure parameters and question roster</p>
-            </div>
-            <span className="px-3 py-1 rounded-full bg-violet-500/10 text-violet-400 border border-violet-500/20 text-xs font-semibold">
-              Upcoming Status
-            </span>
-          </div>
-
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-            <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">
-                Session Name
-              </label>
-              <input
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                required
-                className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3.5 text-sm text-white placeholder:text-slate-500 focus:border-violet-500/50 focus:outline-none"
-                placeholder="e.g., Friday Night Trivia Blitz #102"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">
-                Entry Fee (Coins)
-              </label>
-              <input
-                type="number"
-                value={entryFee}
-                onChange={(e) => setEntryFee(+e.target.value)}
-                className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3.5 text-sm text-white focus:border-violet-500/50 focus:outline-none"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">
-                Starts At
-              </label>
-              <input
-                type="datetime-local"
-                value={startsAt}
-                onChange={(e) => setStartsAt(e.target.value)}
-                required
-                className="w-full rounded-2xl border border-white/10 bg-[#0e121b] px-4 py-3.5 text-sm text-white focus:border-violet-500/50 focus:outline-none"
-              />
-            </div>
-
-            <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">
-                Ends At
-              </label>
-              <input
-                type="datetime-local"
-                value={endsAt}
-                onChange={(e) => setEndsAt(e.target.value)}
-                required
-                className="w-full rounded-2xl border border-white/10 bg-[#0e121b] px-4 py-3.5 text-sm text-white focus:border-violet-500/50 focus:outline-none"
-              />
-            </div>
-
-            <div className="md:col-span-2">
-              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">
-                Prize Pool Amount (₦)
-              </label>
-              <input
-                type="number"
-                value={prizePool}
-                onChange={(e) => setPrizePool(+e.target.value)}
-                className="w-full rounded-2xl border border-white/10 bg-white/[0.03] px-4 py-3.5 text-sm font-bold text-amber-400 focus:border-violet-500/50 focus:outline-none"
-              />
-            </div>
-          </div>
-
-          <div>
-            <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">
-              Attach Published Questions ({selectedQuestions.length} selected)
-            </label>
-            <div className="max-h-56 overflow-y-auto space-y-2 border border-white/10 rounded-2xl p-3 bg-white/[0.01]">
-              {questions.length === 0 ? (
-                <p className="text-xs text-slate-500 p-2">
-                  No published questions found. Create and publish questions first.
-                </p>
-              ) : (
-                questions.map((q) => {
-                  const isChecked = selectedQuestions.includes(q.id);
-                  return (
-                    <label
-                      key={q.id}
-                      className={`flex items-center gap-3 p-3 rounded-xl border transition-all cursor-pointer ${
-                        isChecked
-                          ? "bg-violet-500/15 border-violet-500/40 text-white"
-                          : "bg-white/[0.02] border-white/5 text-slate-400 hover:bg-white/5"
-                      }`}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={isChecked}
-                        onChange={(e) =>
-                          setSelectedQuestions(
-                            e.target.checked
-                              ? [...selectedQuestions, q.id]
-                              : selectedQuestions.filter((id) => id !== q.id)
-                          )
-                        }
-                        className="size-4 rounded border-white/20 text-violet-500 focus:ring-0 accent-violet-500"
-                      />
-                      <span className="text-sm font-medium flex-1 truncate">{q.title}</span>
-                      <span className="text-xs px-2.5 py-0.5 rounded-full bg-white/5 border border-white/10 text-slate-400">
-                        {q.category}
-                      </span>
-                    </label>
-                  );
-                })
-              )}
-            </div>
-          </div>
-
-          <div className="pt-4 border-t border-white/5 flex gap-3">
-            <button
-              type="submit"
-              disabled={creating}
-              className="px-6 py-3 rounded-2xl bg-violet-600 hover:bg-violet-500 text-white font-bold text-sm transition-all disabled:opacity-50"
-            >
-              {creating ? "Creating Session..." : "Save & Create Session"}
-            </button>
-            <button
-              type="button"
-              onClick={() => setShowCreate(false)}
-              className="px-6 py-3 rounded-2xl bg-white/5 text-slate-300 font-semibold text-sm transition-all"
-            >
-              Cancel
-            </button>
-          </div>
-        </form>
+      {toast && (
+        <div className="rounded-2xl px-4 py-3 bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-xs font-bold">
+          ✓ {toast}
+        </div>
       )}
 
-      {/* Tabs */}
-      <div className="wimbf-glass rounded-2xl p-2 inline-flex gap-1">
-        {["all", "upcoming", "active", "completed"].map((t) => (
-          <button
-            key={t}
-            onClick={() => setTab(t)}
-            className={`px-4 py-2 rounded-xl text-xs font-semibold uppercase tracking-wider transition-all ${
-              tab === t
-                ? "bg-violet-500/20 text-violet-300 border border-violet-500/40 shadow-md shadow-violet-500/10"
-                : "text-slate-400 hover:text-slate-200"
-            }`}
-          >
-            {t}
-          </button>
-        ))}
+      {error && (
+        <div className="rounded-2xl px-4 py-3 bg-rose-500/15 border border-rose-500/30 text-rose-300 text-xs font-bold">
+          ⚠ {error}
+        </div>
+      )}
+
+      {/* Session-to-Session Filter Tabs */}
+      <div className="flex flex-wrap items-center justify-between gap-4 bg-[#0f1219] p-4 rounded-2xl border border-white/10">
+        <div className="flex flex-wrap items-center gap-2">
+          {(
+            [
+              { id: "all", label: `All Sessions (${sessions.length})` },
+              { id: "active", label: `Active / Ongoing (${activeCount})` },
+              { id: "upcoming", label: `Scheduled / Paused (${upcomingCount})` },
+              { id: "completed", label: `Completed (${completedCount})` },
+            ] as const
+          ).map((t) => (
+            <button
+              key={t.id}
+              onClick={() => setTabFilter(t.id)}
+              className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${
+                tabFilter === t.id
+                  ? "bg-amber-500 text-slate-950 shadow-lg shadow-amber-500/20"
+                  : "bg-white/[0.03] text-slate-300 hover:bg-white/[0.08] border border-white/5"
+              }`}
+            >
+              {t.label}
+            </button>
+          ))}
+        </div>
+
+        <Link
+          href="/admin/questions"
+          className="text-xs font-bold text-amber-400 hover:text-amber-300"
+        >
+          Inspect Question Bank ({publishedQuestions.length} Published) →
+        </Link>
       </div>
 
-      {/* Sessions List */}
+      {/* Sessions Cards / Table */}
       {loading ? (
-        <div className="flex flex-col items-center justify-center py-20">
-          <div className="size-10 animate-spin rounded-full border-2 border-violet-500 border-t-transparent mb-3" />
+        <div className="flex flex-col items-center justify-center py-16">
+          <div className="size-8 animate-spin rounded-full border-2 border-amber-500 border-t-transparent mb-3" />
           <p className="text-xs text-slate-400">Loading game sessions...</p>
         </div>
-      ) : filtered.length === 0 ? (
-        <div className="wimbf-glass rounded-3xl p-12 text-center space-y-3">
-          <h3 className="text-lg font-bold text-white">No Sessions Found</h3>
-          <p className="text-xs text-slate-400">No sessions match the selected filter category.</p>
+      ) : filteredSessions.length === 0 ? (
+        <div className="rounded-3xl p-12 bg-[#0f1219] border border-white/10 text-center space-y-3">
+          <p className="text-base font-bold text-white">No sessions match this filter</p>
+          <p className="text-xs text-slate-400">
+            Click &ldquo;+ Create New Game Session&rdquo; above to schedule or launch a 10-question session.
+          </p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-          {filtered.map((s) => (
-            <div
-              key={s.id}
-              className="wimbf-glass wimbf-glass-hover rounded-3xl p-6 border border-white/5 space-y-5 flex flex-col justify-between"
-            >
-              <div className="space-y-3">
-                <div className="flex items-start justify-between gap-3">
-                  <h3 className="font-bold text-base text-white leading-snug">{s.name}</h3>
-                  <span
-                    className={`px-3 py-1 rounded-full text-[10px] font-extrabold uppercase tracking-wider border ${
-                      statusBadgeStyle[s.status] ?? "bg-slate-500/10 text-slate-400"
-                    }`}
+        <div className="space-y-4">
+          {filteredSessions.map((s) => {
+            const qList = s.assigned_questions ?? [];
+            const isExpanded = expandedSessionId === s.id;
+            const countdown = formatCountdown(s.starts_at, s.ends_at, s.status, s.is_paused);
+            const busy = busySessionId === s.id;
+
+            return (
+              <div
+                key={s.id}
+                className="rounded-3xl p-6 bg-[#0f1219] border border-white/10 hover:border-white/20 transition-all space-y-5"
+              >
+                <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+                  <div className="space-y-1.5">
+                    <div className="flex flex-wrap items-center gap-2.5">
+                      <span
+                        className={`px-2.5 py-0.5 rounded-full text-xs font-extrabold uppercase tracking-wider ${
+                          s.status === "active"
+                            ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40"
+                            : s.status === "completed"
+                            ? "bg-indigo-500/20 text-indigo-300 border border-indigo-500/40"
+                            : s.is_paused
+                            ? "bg-rose-500/20 text-rose-300 border border-rose-500/40"
+                            : "bg-amber-500/20 text-amber-300 border border-amber-500/40"
+                        }`}
+                      >
+                        {s.is_paused && s.status === "upcoming" ? "PAUSED" : s.status}
+                      </span>
+                      <span className="px-3 py-0.5 rounded-full bg-white/5 border border-white/10 text-xs font-mono font-bold text-amber-300">
+                        ⏱ {countdown}
+                      </span>
+                      <span className="text-xs text-slate-400">
+                        {new Date(s.starts_at).toLocaleString("en-NG", {
+                          dateStyle: "medium",
+                          timeStyle: "short",
+                        })}{" "}
+                        →{" "}
+                        {new Date(s.ends_at).toLocaleString("en-NG", {
+                          dateStyle: "medium",
+                          timeStyle: "short",
+                        })}
+                      </span>
+                    </div>
+                    <h2 className="text-xl font-black text-white">{s.name}</h2>
+                  </div>
+
+                  {/* Session Lifecycle Controls (Start, Pause/Resume, End & Publish, Edit) */}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <button
+                      onClick={() => openEditModal(s)}
+                      className="px-3.5 py-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-bold text-slate-200"
+                    >
+                      ✎ Edit Session
+                    </button>
+
+                    {s.status === "upcoming" && (
+                      <button
+                        disabled={busy}
+                        onClick={() =>
+                          handleSessionAction(s.id, s.is_paused ? "resume" : "start")
+                        }
+                        className="px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-extrabold"
+                      >
+                        ▶ {s.is_paused ? "Resume Session" : "Start Session Live"}
+                      </button>
+                    )}
+
+                    {s.status === "active" && (
+                      <>
+                        <button
+                          disabled={busy}
+                          onClick={() => handleSessionAction(s.id, "pause")}
+                          className="px-3.5 py-2 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-300 text-xs font-bold"
+                        >
+                          ⏸ Pause Session
+                        </button>
+                        <button
+                          disabled={busy}
+                          onClick={() => handleSessionAction(s.id, "close_and_score")}
+                          className="px-4 py-2 rounded-xl bg-indigo-500 hover:bg-indigo-400 text-white text-xs font-extrabold shadow-lg shadow-indigo-500/25"
+                        >
+                          {busy ? "Scoring..." : "✓ End & Publish Session Results"}
+                        </button>
+                      </>
+                    )}
+
+                    {s.status === "completed" && (
+                      <button
+                        disabled={busy}
+                        onClick={() => handleSessionAction(s.id, "close_and_score")}
+                        className="px-3.5 py-2 rounded-xl bg-indigo-500/15 hover:bg-indigo-500/25 border border-indigo-500/30 text-indigo-300 text-xs font-bold"
+                      >
+                        ↻ Recalculate Scores
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                {/* Key Session Metrics Bar */}
+                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 pt-2">
+                  <div className="rounded-2xl p-3.5 bg-white/[0.02] border border-white/5">
+                    <p className="text-[11px] font-semibold text-slate-400">Prize Pool</p>
+                    <p className="text-lg font-black text-amber-400 mt-0.5">
+                      ₦{Number(s.prize_pool ?? 0).toLocaleString()}
+                    </p>
+                    <p className="text-[10px] text-slate-500">
+                      {s.entry_fee_coins > 0 ? `${s.entry_fee_coins} Coins` : "Free Entry (0 Coins)"}
+                    </p>
+                  </div>
+
+                  <div className="rounded-2xl p-3.5 bg-white/[0.02] border border-white/5">
+                    <p className="text-[11px] font-semibold text-slate-400">
+                      Participating Players
+                    </p>
+                    <p className="text-lg font-black text-white mt-0.5">
+                      {(s.participating_players ?? 0).toLocaleString()}
+                    </p>
+                    <p className="text-[10px] text-slate-500">
+                      {s.total_plays ?? 0} total plays ({s.repeat_plays ?? 0} replays)
+                    </p>
+                  </div>
+
+                  <div className="rounded-2xl p-3.5 bg-white/[0.02] border border-white/5">
+                    <p className="text-[11px] font-semibold text-slate-400">
+                      Guesses Submitted
+                    </p>
+                    <p className="text-lg font-black text-emerald-400 mt-0.5">
+                      {(s.guesses_submitted ?? 0).toLocaleString()}
+                    </p>
+                    <p className="text-[10px] text-slate-500">
+                      Live answers recorded in session
+                    </p>
+                  </div>
+
+                  <div className="rounded-2xl p-3.5 bg-white/[0.02] border border-white/5 flex flex-col justify-between">
+                    <div className="flex items-center justify-between">
+                      <p className="text-[11px] font-semibold text-slate-400">
+                        Assigned Questions
+                      </p>
+                      <button
+                        onClick={() =>
+                          setExpandedSessionId(isExpanded ? null : s.id)
+                        }
+                        className="text-[11px] font-bold text-indigo-300 hover:text-indigo-200"
+                      >
+                        {isExpanded ? "Hide ▲" : "Preview 10 Qs ▼"}
+                      </button>
+                    </div>
+                    <p className="text-lg font-black text-indigo-300 mt-0.5">
+                      {qList.length} questions
+                    </p>
+                    <p className="text-[10px] text-slate-500">
+                      Standard 10-question session set
+                    </p>
+                  </div>
+                </div>
+
+                {/* Expandable 10 Assigned Questions Preview */}
+                {isExpanded && (
+                  <div className="rounded-2xl p-4 bg-white/[0.02] border border-indigo-500/25 space-y-3">
+                    <div className="flex items-center justify-between">
+                      <h3 className="text-xs font-bold uppercase tracking-wider text-indigo-300">
+                        Assigned Questions in {s.name} ({qList.length})
+                      </h3>
+                      <Link
+                        href="/admin/questions"
+                        className="text-xs font-semibold text-amber-400 hover:underline"
+                      >
+                        Open in Question Bank →
+                      </Link>
+                    </div>
+                    {qList.length === 0 ? (
+                      <p className="text-xs text-slate-400">
+                        No questions assigned yet. Click &ldquo;Edit Session&rdquo; to assign 10 questions.
+                      </p>
+                    ) : (
+                      <div className="grid grid-cols-1 md:grid-cols-2 gap-2.5">
+                        {qList.map((aq) => (
+                          <div
+                            key={`${s.id}_${aq.question_id}_${aq.position}`}
+                            className="flex items-center justify-between gap-2 p-2.5 rounded-xl bg-[#0b0e14] border border-white/5 text-xs"
+                          >
+                            <div className="flex items-center gap-2.5 min-w-0">
+                              <span className="px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 font-black shrink-0">
+                                Q{aq.position}
+                              </span>
+                              <span className="text-white font-semibold truncate">
+                                {aq.title}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-2 shrink-0">
+                              <span className="px-2 py-0.5 rounded bg-white/5 text-slate-300 text-[10px]">
+                                {aq.category}
+                              </span>
+                              <span className="font-mono text-[11px] text-emerald-400">
+                                {aq.guesses_count} picks
+                              </span>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
+
+                {/* Direct Cross-Module Action Links (Inspect Gameplay, View Leaderboard, Manage Winners) */}
+                <div className="flex flex-wrap items-center justify-between gap-3 pt-2 border-t border-white/10">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Link
+                      href={`/admin/gameplay?sessionId=${s.id}`}
+                      className="px-3.5 py-1.5 rounded-xl bg-amber-500/15 hover:bg-amber-500/25 border border-amber-500/30 text-amber-300 text-xs font-bold transition-colors"
+                    >
+                      Inspect Gameplay ↗
+                    </Link>
+                    <Link
+                      href={`/admin/leaderboards?sessionId=${s.id}`}
+                      className="px-3.5 py-1.5 rounded-xl bg-sky-500/15 hover:bg-sky-500/25 border border-sky-500/30 text-sky-300 text-xs font-bold transition-colors"
+                    >
+                      View Leaderboard ↗
+                    </Link>
+                    <Link
+                      href={`/admin/winners?sessionId=${s.id}`}
+                      className="px-3.5 py-1.5 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-300 text-xs font-bold transition-colors"
+                    >
+                      Manage Winners &amp; Prizes ↗
+                    </Link>
+                  </div>
+                  <button
+                    onClick={() => setExpandedSessionId(isExpanded ? null : s.id)}
+                    className="text-xs font-semibold text-slate-400 hover:text-white"
                   >
-                    {s.status}
-                  </span>
-                </div>
-
-                <div className="text-xs text-slate-400 flex flex-col space-y-1">
-                  <span>
-                    Starts:{" "}
-                    <strong className="text-slate-200">
-                      {new Date(s.starts_at).toLocaleString("en-NG", {
-                        weekday: "short",
-                        month: "short",
-                        day: "numeric",
-                        hour: "2-digit",
-                        minute: "2-digit",
-                      })}
-                    </strong>
-                  </span>
-                  <span>
-                    Ends:{" "}
-                    <strong className="text-slate-200">
-                      {new Date(s.ends_at).toLocaleString("en-NG", {
-                        weekday: "short",
-                        month: "short",
-                        day: "numeric",
-                        hour: "2-digit",
-                        minute: "2-digit",
-                      })}
-                    </strong>
-                  </span>
+                    {isExpanded ? "Collapse Questions ▲" : `Inspect ${qList.length} Assigned Questions ▼`}
+                  </button>
                 </div>
               </div>
+            );
+          })}
+        </div>
+      )}
 
-              <div className="pt-4 border-t border-white/5 flex items-center justify-between gap-3">
-                <div className="flex items-center gap-3 text-xs">
-                  <span className="px-3 py-1.5 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-300 font-bold">
-                    ₦{s.prize_pool.toLocaleString()}
-                  </span>
-                  <span className="px-3 py-1.5 rounded-xl bg-white/5 border border-white/10 text-slate-300 font-medium">
-                    {s.entry_fee_coins} coins
-                  </span>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  {s.status === "upcoming" && (
-                    <button
-                      onClick={() => updateStatus(s.id, "active")}
-                      className="px-3.5 py-1.5 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs transition-all shadow-md shadow-emerald-500/20"
-                    >
-                      Activate Now
-                    </button>
-                  )}
-                  {s.status === "active" && (
-                    <button
-                      onClick={() => closeSession(s.id)}
-                      className="px-3.5 py-1.5 rounded-xl bg-rose-500 hover:bg-rose-400 text-white font-bold text-xs transition-all shadow-md shadow-rose-500/20"
-                    >
-                      Close & Score
-                    </button>
-                  )}
-                </div>
+      {/* Create / Edit Session Modal */}
+      {showModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 overflow-y-auto">
+          <div className="w-full max-w-3xl rounded-3xl bg-[#0f1219] border border-amber-500/30 p-6 md:p-8 space-y-6 max-h-[92vh] overflow-y-auto shadow-2xl">
+            <div className="flex items-center justify-between border-b border-white/10 pb-4">
+              <div>
+                <h2 className="text-xl font-extrabold text-white">
+                  {editingSessionId ? "Edit Game Session Details" : "Create New Game Session"}
+                </h2>
+                <p className="text-xs text-slate-400">
+                  Configure session schedule, ₦500,000 prize pool preset (36 or 49 winners), and assign the 10 session questions.
+                </p>
               </div>
+              <button
+                onClick={() => setShowModal(false)}
+                className="px-3 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 text-xs font-bold text-slate-300"
+              >
+                ✕ Close
+              </button>
             </div>
-          ))}
+
+            <form onSubmit={handleSaveSession} className="space-y-5">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div className="sm:col-span-2">
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1.5">
+                    Session Name *
+                  </label>
+                  <input
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    required
+                    className="w-full rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm text-white"
+                    placeholder="e.g., Weekend Crowd Challenge"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1.5">
+                    Prize Pool (₦) *
+                  </label>
+                  <input
+                    type="number"
+                    value={prizePool}
+                    onChange={(e) => setPrizePool(e.target.value)}
+                    required
+                    className="w-full rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm text-amber-300 font-bold"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1.5">
+                    Start Date &amp; Time *
+                  </label>
+                  <input
+                    type="datetime-local"
+                    value={startsAt}
+                    onChange={(e) => setStartsAt(e.target.value)}
+                    required
+                    className="w-full rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2.5 text-xs text-white"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1.5">
+                    End Date &amp; Time (72h Window) *
+                  </label>
+                  <input
+                    type="datetime-local"
+                    value={endsAt}
+                    onChange={(e) => setEndsAt(e.target.value)}
+                    required
+                    className="w-full rounded-xl border border-white/10 bg-white/[0.04] px-3 py-2.5 text-xs text-white"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1.5">
+                    Session Status
+                  </label>
+                  <select
+                    value={initialStatus}
+                    onChange={(e) => setInitialStatus(e.target.value as "active" | "upcoming")}
+                    className="w-full rounded-xl border border-white/10 bg-[#0e121b] px-3 py-2.5 text-xs font-bold text-white"
+                  >
+                    <option value="active">Active (Live Immediately)</option>
+                    <option value="upcoming">Upcoming (Scheduled)</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Prize Distribution Preset (Page 20: 36 Winners vs 49 Winners) */}
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPrizePreset("36_winners");
+                    setPrizePool("500000");
+                  }}
+                  className={`p-3.5 rounded-2xl border text-left transition-all ${
+                    prizePreset === "36_winners"
+                      ? "bg-amber-500/15 border-amber-500 text-white"
+                      : "bg-white/[0.02] border-white/10 text-slate-300"
+                  }`}
+                >
+                  <p className="text-xs font-extrabold text-amber-400">
+                    Preset A: 36 Winners / ₦500,000 (Page 20 Left)
+                  </p>
+                  <p className="text-[11px] text-slate-300 mt-1">
+                    1st: ₦100k · 2nd: ₦50k · 3rd: ₦20k · 4th–36th: ₦10k each
+                  </p>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPrizePreset("49_winners");
+                    setPrizePool("500000");
+                  }}
+                  className={`p-3.5 rounded-2xl border text-left transition-all ${
+                    prizePreset === "49_winners"
+                      ? "bg-emerald-500/15 border-emerald-500 text-white"
+                      : "bg-white/[0.02] border-white/10 text-slate-300"
+                  }`}
+                >
+                  <p className="text-xs font-extrabold text-emerald-400">
+                    Preset B: 49 Winners / ₦500,000 (Page 20 Right)
+                  </p>
+                  <p className="text-[11px] text-slate-300 mt-1">
+                    1st: ₦100k · 2nd: ₦50k · 3rd: ₦20k · 4th–23rd: ₦10k · 24th–49th: ₦5k
+                  </p>
+                </button>
+              </div>
+
+              {/* Standard 10 Questions Picker */}
+              <div className="space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <label className="text-xs font-bold uppercase tracking-wider text-slate-300">
+                    Select Standard 10 Questions ({selectedQuestionIds.length} / 10 selected) *
+                  </label>
+                  <button
+                    type="button"
+                    onClick={autoPick10Questions}
+                    className="px-3 py-1.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-300 text-xs font-bold"
+                  >
+                    ✦ Auto-Select 10 Questions
+                  </button>
+                </div>
+
+                <div className="max-h-60 overflow-y-auto rounded-2xl border border-white/10 bg-[#0a0d14] p-2.5 space-y-1.5">
+                  {publishedQuestions.map((q) => {
+                    const idx = selectedQuestionIds.indexOf(q.id);
+                    const selected = idx !== -1;
+                    return (
+                      <div
+                        key={q.id}
+                        onClick={() => toggleQuestion(q.id)}
+                        className={`flex items-center justify-between gap-3 px-3 py-2 rounded-xl cursor-pointer text-xs transition-colors ${
+                          selected
+                            ? "bg-indigo-500/20 border border-indigo-500/40 text-white"
+                            : "hover:bg-white/[0.04] text-slate-300 border border-transparent"
+                        }`}
+                      >
+                        <div className="flex items-center gap-2.5 min-w-0">
+                          <span
+                            className={`size-6 rounded-lg flex items-center justify-center font-black text-[11px] shrink-0 ${
+                              selected
+                                ? "bg-amber-500 text-slate-950"
+                                : "bg-white/5 text-slate-500"
+                            }`}
+                          >
+                            {selected ? `Q${idx + 1}` : "+"}
+                          </span>
+                          <span className="truncate font-semibold">{q.title}</span>
+                        </div>
+                        <span className="px-2 py-0.5 rounded bg-white/5 text-[10px] text-slate-400 shrink-0">
+                          {q.category}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-3 pt-4 border-t border-white/10">
+                <button
+                  type="button"
+                  onClick={() => setShowModal(false)}
+                  className="px-4 py-2.5 rounded-xl bg-white/5 text-slate-300 text-xs font-semibold"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={saving}
+                  className="px-6 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-extrabold"
+                >
+                  {saving
+                    ? "Saving..."
+                    : editingSessionId
+                    ? "Save Session Changes"
+                    : "Create Session"}
+                </button>
+              </div>
+            </form>
+          </div>
         </div>
       )}
     </div>

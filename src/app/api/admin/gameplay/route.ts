@@ -36,6 +36,7 @@ export async function GET(req: NextRequest) {
       { data: entries },
       { data: answers },
       { data: questions },
+      { data: sessionQuestions },
       { data: profiles },
       { data: auditLogs },
     ] = await Promise.all([
@@ -57,6 +58,10 @@ export async function GET(req: NextRequest) {
         .from("questions")
         .select("id, title, category, type, status, question_options(id, label, position, media_url)")
         .order("created_at", { ascending: false }),
+      supabase
+        .from("session_questions")
+        .select("session_id, question_id, position")
+        .order("position", { ascending: true }),
       supabase
         .from("profiles")
         .select("id, username, full_name, state, gender"),
@@ -220,8 +225,27 @@ export async function GET(req: NextRequest) {
       oMap.set(ans.option_id, cur);
     }
 
+    // Map session_questions: which questions belong to which session and at what position (1..10)
+    const sessionQuestionMap = new Map<string, Map<string, number>>();
+    const questionSessionsUsedMap = new Map<string, string[]>();
+    for (const sq of sessionQuestions ?? []) {
+      let qPosMap = sessionQuestionMap.get(sq.session_id);
+      if (!qPosMap) {
+        qPosMap = new Map();
+        sessionQuestionMap.set(sq.session_id, qPosMap);
+      }
+      qPosMap.set(sq.question_id, sq.position);
+
+      const usedList = questionSessionsUsedMap.get(sq.question_id) ?? [];
+      if (!usedList.includes(sq.session_id)) usedList.push(sq.session_id);
+      questionSessionsUsedMap.set(sq.question_id, usedList);
+    }
+
     // Dynamic points lookup per option_id (10 pts for most selected -> 1 pt for least selected)
     const liveOptionPoints = new Map<string, { rank: number; points: number; percentage: number }>();
+
+    const currentSessionPosMap =
+      sessionFilter !== "all" ? sessionQuestionMap.get(sessionFilter) : undefined;
 
     const questionBreakdown = Array.from(questionMap.values())
       .filter((q) => questionFilter === "all" || q.id === questionFilter)
@@ -283,12 +307,25 @@ export async function GET(req: NextRequest) {
 
         const mostSelected = enrichedOptions[0] ?? null;
         const leastSelected = enrichedOptions[enrichedOptions.length - 1] ?? null;
+        const usedSessionIds = questionSessionsUsedMap.get(q.id) ?? [];
+        const assignedToSession =
+          sessionFilter === "all" ? true : currentSessionPosMap?.has(q.id) ?? false;
+        const sessionPosition =
+          sessionFilter !== "all" && currentSessionPosMap?.has(q.id)
+            ? (currentSessionPosMap.get(q.id) ?? null)
+            : null;
 
         return {
           id: q.id,
           title: q.title,
           category: q.category,
           type: q.type,
+          assignedToSession,
+          sessionPosition,
+          sessionsUsedCount: usedSessionIds.length,
+          usedSessionNames: usedSessionIds
+            .map((sid) => sessionMap.get(sid)?.name)
+            .filter(Boolean),
           totalSelections: totalQuestionSelections,
           avgResponseMs:
             totalQuestionSelections > 0
@@ -300,6 +337,16 @@ export async function GET(req: NextRequest) {
           leastSelected,
           options: enrichedOptions,
         };
+      })
+      .sort((a, b) => {
+        if (sessionFilter !== "all") {
+          if (a.assignedToSession && !b.assignedToSession) return -1;
+          if (!a.assignedToSession && b.assignedToSession) return 1;
+          if (a.sessionPosition !== null && b.sessionPosition !== null) {
+            return a.sessionPosition - b.sessionPosition;
+          }
+        }
+        return b.totalSelections - a.totalSelections;
       });
 
     // ── Identify Most and Least Selected Options Spotlight ──

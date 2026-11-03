@@ -5,14 +5,18 @@ import { usePathname } from "next/navigation";
 import { ReactNode, useState } from "react";
 
 const navItems = [
-  { label: "Overview", href: "/admin", category: "Core" },
-  { label: "Gameplay Analytics", href: "/admin/gameplay", category: "Core" },
-  { label: "Brand & Market Data", href: "/admin/insights", category: "Data Monetization" },
-  { label: "Questions & Points", href: "/admin/questions", category: "Game Operations" },
+  { label: "Dashboard", href: "/admin", category: "Core" },
+  { label: "Live Gameplay", href: "/admin/gameplay", category: "Core" },
+  { label: "Leaderboards", href: "/admin/leaderboards", category: "Core" },
+  { label: "Winners & Prizes", href: "/admin/winners", category: "Core" },
+  { label: "Questions & AI Bank", href: "/admin/questions", category: "Game Operations" },
   { label: "Game Sessions", href: "/admin/sessions", category: "Game Operations" },
+  { label: "Brand & Market Data", href: "/admin/insights", category: "Data Monetization" },
   { label: "Players", href: "/admin/players", category: "Audience" },
-  { label: "Support", href: "/admin/support", category: "Audience" },
-  { label: "Settings", href: "/admin/settings", category: "System" },
+  { label: "Referrals & Promos", href: "/admin/referrals", category: "Audience" },
+  { label: "Notifications & Inbox", href: "/admin/notifications", category: "Audience" },
+  { label: "Customer Support", href: "/admin/support", category: "Audience" },
+  { label: "Admin Users & Settings", href: "/admin/settings", category: "System" },
 ];
 
 export default function AdminLayout({ children }: { children: ReactNode }) {
