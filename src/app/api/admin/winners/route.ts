@@ -7,6 +7,22 @@ export type PrizeTier = {
   amount: number;
 };
 
+type ArchivedAnswerItem = {
+  question_id: string;
+  option_id: string;
+  response_ms?: number;
+};
+
+type ArchivedAttemptDetail = {
+  entry_id?: string;
+  session_id?: string;
+  attempt_number?: number;
+  questions_answered?: number;
+  total_score?: number;
+  total_response_ms?: number;
+  answers?: ArchivedAnswerItem[];
+};
+
 export const PRESET_36_WINNERS: PrizeTier[] = [
   { rank_from: 1, rank_to: 1, amount: 100000 },
   { rank_from: 2, rank_to: 2, amount: 50000 },
@@ -78,6 +94,7 @@ export async function GET(req: NextRequest) {
       { data: questions },
       { data: profiles },
       { data: appSettings },
+      { data: auditLogs },
     ] = await Promise.all([
       supabase
         .from("game_sessions")
@@ -96,6 +113,10 @@ export async function GET(req: NextRequest) {
         .from("profiles")
         .select("id, username, full_name, state, gender, phone"),
       supabase.from("app_settings").select("key, value"),
+      supabase
+        .from("audit_logs")
+        .select("id, actor_id, target_id, detail")
+        .eq("action", "gameplay_attempt_archived"),
     ]);
 
     const allSessions = sessions ?? [];
@@ -158,11 +179,27 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    // Calculate live consensus scores for this session
+    // Filter archived logs for this session
+    const sessionArchived = (auditLogs ?? []).filter((l) => {
+      const d = (l.detail ?? {}) as ArchivedAttemptDetail;
+      return (d.session_id || l.target_id) === sessionId;
+    });
+
+    // Calculate live consensus scores for this session (including archived attempt answers)
     const sessionAnswers = (answers ?? []).filter((a) => a.session_id === sessionId);
     const optionPicks = new Map<string, number>();
     for (const a of sessionAnswers) {
       optionPicks.set(a.option_id, (optionPicks.get(a.option_id) ?? 0) + 1);
+    }
+    for (const l of sessionArchived) {
+      const d = (l.detail ?? {}) as ArchivedAttemptDetail;
+      if (Array.isArray(d.answers)) {
+        for (const ans of d.answers) {
+          if (ans.option_id) {
+            optionPicks.set(ans.option_id, (optionPicks.get(ans.option_id) ?? 0) + 1);
+          }
+        }
+      }
     }
 
     const optionPts = new Map<string, number>();
@@ -199,17 +236,51 @@ export async function GET(req: NextRequest) {
     const sessionEntries = (entries ?? []).filter((e) => e.session_id === sessionId);
     const scoredEntries = sessionEntries.map((e) => {
       const agg = entryAgg.get(e.id);
-      const score = agg && agg.count > 0 ? agg.score : Number(e.total_score ?? 0);
-      const totalTimeMs =
+      const currentScore = agg && agg.count > 0 ? agg.score : Number(e.total_score ?? 0);
+      const currentTimeMs =
         agg && agg.count > 0 ? agg.ms : Number(e.total_response_ms ?? 0);
+
+      let bestScore = Math.max(currentScore, Number(e.total_score ?? 0));
+      let bestTimeMs =
+        currentScore >= Number(e.total_score ?? 0) && currentTimeMs > 0
+          ? currentTimeMs
+          : Number(e.total_response_ms ?? (currentTimeMs || 45000));
+
+      const playerArch = sessionArchived.filter((l) => {
+        const d = (l.detail ?? {}) as ArchivedAttemptDetail;
+        return d.entry_id === e.id || l.actor_id === e.user_id;
+      });
+
+      for (const log of playerArch) {
+        const d = (log.detail ?? {}) as ArchivedAttemptDetail;
+        let archDynScore = 0;
+        let archDynMs = 0;
+        if (Array.isArray(d.answers)) {
+          for (const ans of d.answers) {
+            archDynScore += optionPts.get(ans.option_id) ?? 1;
+            archDynMs += Number(ans.response_ms ?? 0);
+          }
+        }
+        const candScore = Math.max(archDynScore, Number(d.total_score ?? 0));
+        const candMs = Number(d.total_response_ms || archDynMs || 45000);
+        if (
+          candScore > bestScore ||
+          (candScore === bestScore && candMs < bestTimeMs)
+        ) {
+          bestScore = candScore;
+          bestTimeMs = candMs;
+        }
+      }
+
       return {
         ...e,
-        computedScore: score,
-        computedTimeMs: totalTimeMs,
+        computedScore: bestScore,
+        computedTimeMs: bestTimeMs,
+        attemptsCount: Math.max(1, playerArch.length + (agg && agg.count > 0 ? 1 : 0)),
       };
     });
 
-    // Sort by Score DESC, then Total Time (ms) ASC
+    // Sort by Best Score DESC, then Best Total Time (ms) ASC
     scoredEntries.sort((a, b) => {
       if (b.computedScore !== a.computedScore) return b.computedScore - a.computedScore;
       return a.computedTimeMs - b.computedTimeMs;
@@ -251,6 +322,7 @@ export async function GET(req: NextRequest) {
           gender: prof.gender,
           points: e.computedScore,
           totalTimeMs: e.computedTimeMs,
+          attemptsCount: e.attemptsCount,
           prizeAllocated,
           bankName: bank.bankName,
           accountNumber: bank.accountNumber,
@@ -269,7 +341,7 @@ export async function GET(req: NextRequest) {
         "Username",
         "Full_Name",
         "State",
-        "Score_Points",
+        "Best_Score_Points",
         "Total_Time_Seconds",
         "Total_Time_Ms",
         "Prize_Allocated_NGN",

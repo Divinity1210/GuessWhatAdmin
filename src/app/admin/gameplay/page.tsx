@@ -87,6 +87,8 @@ type HistoricalPlayItem = {
   state: string;
   attemptNumber: number;
   isReplay: boolean;
+  isBestScoreRun?: boolean;
+  bestScore?: number;
   status: "Completed" | "In Progress" | "Archived Replay";
   questionsAnswered: number;
   totalScore: number;
@@ -217,6 +219,13 @@ export default function AdminGameplayAnalyticsPage() {
   const [activeTab, setActiveTab] = useState<
     "all" | "live_options" | "points_time" | "repeat_sessions" | "history"
   >("all");
+  const [formatFilter, setFormatFilter] = useState<
+    "all" | "text" | "color" | "number" | "image"
+  >("all");
+  const [playTypeFilter, setPlayTypeFilter] = useState<
+    "all" | "best" | "repeat" | "first"
+  >("all");
+  const [stateFilter, setStateFilter] = useState<string>("all");
 
   // Support deep-linking ?sessionId=... from Sessions / Leaderboards pages
   useEffect(() => {
@@ -298,10 +307,38 @@ export default function AdminGameplayAnalyticsPage() {
 
   const visibleQuestions = (data?.questionBreakdown ?? []).filter((q) => {
     if (sessionId !== "all" && showOnlySessionQuestions) {
-      return q.assignedToSession !== false;
+      if (q.assignedToSession === false) return false;
+    }
+    if (formatFilter !== "all" && q.type.toLowerCase() !== formatFilter) {
+      return false;
     }
     return true;
   });
+
+  const allPlayerStates = Array.from(
+    new Set(
+      (data?.historicalPlays ?? [])
+        .map((hp) => hp.state)
+        .filter(Boolean)
+    )
+  ).sort();
+
+  const filteredHistorical = (data?.historicalPlays ?? []).filter((hp) => {
+    if (stateFilter !== "all" && hp.state !== stateFilter) return false;
+    if (playTypeFilter === "best") return hp.isBestScoreRun !== false;
+    if (playTypeFilter === "repeat") return hp.isReplay;
+    if (playTypeFilter === "first") return !hp.isReplay;
+    return true;
+  });
+
+  const filteredRepeatPlayers = (data?.repeatGameplay.players ?? []).filter(
+    (p) => {
+      if (stateFilter !== "all" && p.state !== stateFilter) return false;
+      if (playTypeFilter === "repeat") return p.replayCount > 0;
+      if (playTypeFilter === "first") return p.replayCount === 0;
+      return true;
+    }
+  );
 
   const activeQuestion =
     visibleQuestions.find((q) => q.id === selectedQuestionId) ??
@@ -509,6 +546,80 @@ export default function AdminGameplayAnalyticsPage() {
         )}
       </div>
 
+      {/* ── Interactive Multi-Filter Bar (Format Pills + Play Type Pills + State Dropdown) ── */}
+      <div className="rounded-2xl bg-[#0b0e17] border border-white/10 p-4 flex flex-col xl:flex-row xl:items-center justify-between gap-4">
+        <div className="flex flex-wrap items-center gap-2">
+          <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 mr-1">
+            Question Format:
+          </span>
+          {(
+            [
+              { id: "all", label: "All Formats" },
+              { id: "text", label: "Text" },
+              { id: "color", label: "Color" },
+              { id: "number", label: "Number" },
+              { id: "image", label: "Image" },
+            ] as const
+          ).map((fmt) => (
+            <button
+              key={fmt.id}
+              type="button"
+              onClick={() => setFormatFilter(fmt.id)}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-colors ${
+                formatFilter === fmt.id
+                  ? "bg-amber-500 text-slate-950"
+                  : "bg-white/[0.03] text-slate-300 hover:bg-white/[0.08] border border-white/5"
+              }`}
+            >
+              {fmt.label}
+            </button>
+          ))}
+        </div>
+
+        <div className="flex flex-wrap items-center gap-2.5">
+          <div className="flex flex-wrap items-center gap-1.5">
+            <span className="text-[11px] font-bold uppercase tracking-wider text-slate-400 mr-1">
+              Play Filter:
+            </span>
+            {(
+              [
+                { id: "all", label: "All Plays" },
+                { id: "best", label: "Best Score Runs" },
+                { id: "repeat", label: "Repeat Plays Only" },
+                { id: "first", label: "First Attempts Only" },
+              ] as const
+            ).map((pf) => (
+              <button
+                key={pf.id}
+                type="button"
+                onClick={() => setPlayTypeFilter(pf.id)}
+                className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-colors ${
+                  playTypeFilter === pf.id
+                    ? "bg-emerald-500 text-slate-950"
+                    : "bg-white/[0.03] text-slate-300 hover:bg-white/[0.08] border border-white/5"
+                }`}
+              >
+                {pf.label}
+              </button>
+            ))}
+          </div>
+
+          <select
+            aria-label="Filter Gameplay by Player State"
+            value={stateFilter}
+            onChange={(e) => setStateFilter(e.target.value)}
+            className="rounded-xl border border-white/10 bg-[#121726] px-3 py-1.5 text-xs font-bold text-slate-200 focus:border-amber-500 focus:outline-none"
+          >
+            <option value="all">All States ({allPlayerStates.length})</option>
+            {allPlayerStates.map((st) => (
+              <option key={st} value={st}>
+                {st}
+              </option>
+            ))}
+          </select>
+        </div>
+      </div>
+
       {loading && !data ? (
         <div className="flex flex-col items-center justify-center py-20">
           <div className="size-8 animate-spin rounded-full border-2 border-amber-500 border-t-transparent mb-3" />
@@ -584,6 +695,260 @@ export default function AdminGameplayAnalyticsPage() {
                 <strong className="text-white">{data.repeatGameplay.repeatPlayersCount}</strong> repeat players (
                 {data.repeatGameplay.avgPlaysPerPlayer}x avg)
               </p>
+            </div>
+          </div>
+
+          {/* ── 3 Visual Analytics Charts Row (Option Share Donut + Points Vertical Bar Chart + Question Speed Curve) ── */}
+          <div className="grid grid-cols-1 lg:grid-cols-12 gap-5">
+            {/* Chart 1: Active Question 10-Option Donut & Consensus Share (4 cols) */}
+            <div className="lg:col-span-4 rounded-3xl p-5 bg-[#0b0e17] border border-white/10 shadow-xl flex flex-col justify-between space-y-4">
+              <div>
+                <span className="text-[10px] font-extrabold uppercase tracking-widest text-emerald-400">
+                  Active Question Share
+                </span>
+                <h2 className="text-sm font-extrabold text-white truncate mt-0.5">
+                  {activeQuestion ? activeQuestion.title : "10-Option Consensus Donut"}
+                </h2>
+              </div>
+
+              {activeQuestion ? (
+                (() => {
+                  const palette = [
+                    "#10b981",
+                    "#f59e0b",
+                    "#38bdf8",
+                    "#a855f7",
+                    "#f43f5e",
+                    "#14b8a6",
+                    "#eab308",
+                    "#6366f1",
+                    "#ec4899",
+                    "#64748b",
+                  ];
+                  const circumference = 2 * Math.PI * 36;
+                  let cumulativePct = 0;
+
+                  return (
+                    <div className="flex items-center justify-between gap-4">
+                      <div className="relative size-28 flex items-center justify-center shrink-0">
+                        <svg viewBox="0 0 100 100" className="size-28 -rotate-90">
+                          <circle
+                            cx="50"
+                            cy="50"
+                            r="36"
+                            fill="none"
+                            stroke="rgba(255,255,255,0.06)"
+                            strokeWidth="12"
+                          />
+                          {activeQuestion.options.map((opt, idx) => {
+                            const segLen = (opt.percentage / 100) * circumference;
+                            const offset = -(cumulativePct / 100) * circumference;
+                            cumulativePct += opt.percentage;
+                            if (segLen <= 0) return null;
+                            return (
+                              <circle
+                                key={opt.id}
+                                cx="50"
+                                cy="50"
+                                r="36"
+                                fill="none"
+                                stroke={palette[idx % palette.length]}
+                                strokeWidth="12"
+                                strokeDasharray={`${segLen} ${circumference}`}
+                                strokeDashoffset={offset}
+                              />
+                            );
+                          })}
+                        </svg>
+                        <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
+                          <span className="text-base font-black text-white">
+                            {activeQuestion.totalSelections}
+                          </span>
+                          <span className="text-[9px] uppercase text-slate-400">
+                            Picks
+                          </span>
+                        </div>
+                      </div>
+
+                      <div className="flex-1 space-y-1.5 text-xs min-w-0">
+                        {activeQuestion.options.slice(0, 4).map((opt, idx) => (
+                          <div
+                            key={opt.id}
+                            className="flex items-center justify-between gap-2"
+                          >
+                            <span className="inline-flex items-center gap-1.5 text-slate-200 truncate">
+                              <span
+                                className="size-2.5 rounded-full shrink-0"
+                                style={{ backgroundColor: palette[idx] }}
+                              />
+                              <span className="truncate">{opt.label}</span>
+                            </span>
+                            <span className="font-mono text-[11px] font-bold text-amber-300 shrink-0">
+                              {opt.percentage}% ({opt.points}pt)
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                })()
+              ) : (
+                <p className="text-xs text-slate-400">Select a question below.</p>
+              )}
+            </div>
+
+            {/* Chart 2: Points Distribution Vertical Bar Chart (10 pts down to 1 pt) (4 cols) */}
+            <div className="lg:col-span-4 rounded-3xl p-5 bg-[#0b0e17] border border-white/10 shadow-xl flex flex-col justify-between space-y-4">
+              <div className="flex items-center justify-between">
+                <div>
+                  <span className="text-[10px] font-extrabold uppercase tracking-widest text-amber-400">
+                    Points Distribution (10 → 1)
+                  </span>
+                  <h2 className="text-sm font-extrabold text-white mt-0.5">
+                    Guesses by Assigned Point Value
+                  </h2>
+                </div>
+                <span className="text-[11px] font-mono text-slate-400">
+                  {data.overview.liveAnswersInScope} picks
+                </span>
+              </div>
+
+              <div className="grid grid-cols-10 gap-1.5 items-end h-28 pt-2">
+                {(() => {
+                  const maxG = Math.max(
+                    ...data.pointsDistribution.byGuessPoints.map((t) => t.guesses),
+                    1
+                  );
+                  return data.pointsDistribution.byGuessPoints.map((tier) => {
+                    const hPct = Math.max(
+                      Math.round((tier.guesses / maxG) * 100),
+                      10
+                    );
+                    return (
+                      <div
+                        key={tier.points}
+                        title={`${tier.points} pts: ${tier.guesses} picks (${tier.percentage}%)`}
+                        className="flex flex-col items-center justify-end h-full gap-1"
+                      >
+                        <div className="w-full h-20 bg-white/5 rounded-t-md flex items-end overflow-hidden">
+                          <div
+                            className={`w-full rounded-t-md ${
+                              tier.points >= 8
+                                ? "bg-emerald-400"
+                                : tier.points >= 4
+                                ? "bg-amber-400"
+                                : "bg-rose-400"
+                            }`}
+                            style={{ height: `${hPct}%` }}
+                          />
+                        </div>
+                        <span className="text-[9px] font-mono font-bold text-slate-400">
+                          {tier.points}p
+                        </span>
+                      </div>
+                    );
+                  });
+                })()}
+              </div>
+            </div>
+
+            {/* Chart 3: Question Response Speed Curve (Q1 -> Q10 Smooth SVG Area Chart) (4 cols) */}
+            <div className="lg:col-span-4 rounded-3xl p-5 bg-[#0b0e17] border border-white/10 shadow-xl flex flex-col justify-between space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <span className="text-[10px] font-extrabold uppercase tracking-widest text-sky-400">
+                    Question Speed Telemetry
+                  </span>
+                  <h2 className="text-sm font-extrabold text-white mt-0.5">
+                    Avg Response Time Across Questions
+                  </h2>
+                </div>
+                <span className="text-xs font-mono font-bold text-sky-300">
+                  {formatSeconds(data.timingMetrics.avgQuestionTimeMs)} avg
+                </span>
+              </div>
+
+              {(() => {
+                const qSlice = visibleQuestions.slice(0, 10);
+                if (qSlice.length === 0) {
+                  return (
+                    <p className="text-xs text-slate-400 py-8 text-center">
+                      No questions match format filter.
+                    </p>
+                  );
+                }
+                const w = 320;
+                const h = 110;
+                const padX = 18;
+                const padY = 16;
+                const uw = w - padX * 2;
+                const uh = h - padY * 2;
+                const maxMs = Math.max(...qSlice.map((q) => q.avgResponseMs), 3000);
+                const pts = qSlice.map((q, i) => ({
+                  x:
+                    qSlice.length === 1
+                      ? w / 2
+                      : padX + (i / (qSlice.length - 1)) * uw,
+                  y: padY + uh - (q.avgResponseMs / maxMs) * uh,
+                  q,
+                  idx: i,
+                }));
+
+                const lineD = pts
+                  .map(
+                    (p, i) =>
+                      `${i === 0 ? "M" : "L"} ${p.x.toFixed(1)} ${p.y.toFixed(1)}`
+                  )
+                  .join(" ");
+                const areaD = `${lineD} L ${pts[pts.length - 1].x.toFixed(1)} ${
+                  padY + uh
+                } L ${pts[0].x.toFixed(1)} ${padY + uh} Z`;
+
+                return (
+                  <svg viewBox={`0 0 ${w} ${h}`} className="w-full h-28 overflow-visible">
+                    <defs>
+                      <linearGradient id="speedCurveFill" x1="0" y1="0" x2="0" y2="1">
+                        <stop offset="0%" stopColor="#38bdf8" stopOpacity="0.4" />
+                        <stop offset="100%" stopColor="#38bdf8" stopOpacity="0.0" />
+                      </linearGradient>
+                    </defs>
+                    <path d={areaD} fill="url(#speedCurveFill)" />
+                    <path
+                      d={lineD}
+                      fill="none"
+                      stroke="#38bdf8"
+                      strokeWidth="2.5"
+                      strokeLinecap="round"
+                    />
+                    {pts.map((p) => (
+                      <g
+                        key={p.q.id}
+                        className="cursor-pointer"
+                        onClick={() => setSelectedQuestionId(p.q.id)}
+                      >
+                        <circle
+                          cx={p.x}
+                          cy={p.y}
+                          r={p.q.id === activeQuestion?.id ? 5 : 3.5}
+                          fill={
+                            p.q.id === activeQuestion?.id ? "#f59e0b" : "#0b0e17"
+                          }
+                          stroke="#38bdf8"
+                          strokeWidth="2"
+                        />
+                        <text
+                          x={p.x}
+                          y={h - 2}
+                          textAnchor="middle"
+                          className="fill-slate-400 text-[9px] font-mono"
+                        >
+                          Q{p.q.sessionPosition ?? p.idx + 1}
+                        </text>
+                      </g>
+                    ))}
+                  </svg>
+                );
+              })()}
             </div>
           </div>
 
@@ -1275,7 +1640,7 @@ export default function AdminGameplayAnalyticsPage() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-white/5">
-                      {data.repeatGameplay.players.map((p) => (
+                      {filteredRepeatPlayers.map((p) => (
                         <tr key={p.userId} className="hover:bg-white/[0.02]">
                           <th scope="row" className="px-4 py-3 font-semibold text-white">
                             @{p.username}
@@ -1332,7 +1697,7 @@ export default function AdminGameplayAnalyticsPage() {
                     Complete Audit &amp; Attempt Log
                   </span>
                   <h2 className="text-xl font-bold text-white">
-                    Historical Gameplay Data ({data.historicalPlays.length} Attempts)
+                    Historical Gameplay Data ({filteredHistorical.length} Attempts)
                   </h2>
                 </div>
 
@@ -1389,7 +1754,7 @@ export default function AdminGameplayAnalyticsPage() {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-white/5">
-                    {data.historicalPlays.map((hp) => (
+                    {filteredHistorical.map((hp) => (
                       <tr key={hp.id} className="hover:bg-white/[0.02]">
                         <td className="px-4 py-3 text-xs text-slate-400 whitespace-nowrap">
                           {new Date(hp.timestamp).toLocaleString("en-NG", {

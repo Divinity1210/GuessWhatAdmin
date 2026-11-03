@@ -2,11 +2,13 @@ import { NextRequest, NextResponse } from "next/server";
 import { createServiceClient } from "@/lib/supabase";
 
 type ArchivedDetail = {
+  entry_id?: string;
   session_id?: string;
   total_score?: number;
   total_response_ms?: number;
   questions_answered?: number;
   completed_at?: string;
+  answers?: { question_id: string; option_id: string; response_ms?: number }[];
 };
 
 type PrizeTier = {
@@ -32,6 +34,7 @@ export async function GET(req: NextRequest) {
     const range = searchParams.get("range") || "all";
     const fromParam = searchParams.get("from") || "";
     const toParam = searchParams.get("to") || "";
+    const sessionFilter = searchParams.get("sessionId") || "all";
 
     const now = new Date();
     let startMs: number | null = null;
@@ -60,7 +63,6 @@ export async function GET(req: NextRequest) {
       if (toParam) {
         const parsedTo = new Date(toParam);
         if (!Number.isNaN(parsedTo.getTime())) {
-          // Include full end day
           parsedTo.setHours(23, 59, 59, 999);
           endMs = parsedTo.getTime();
         }
@@ -121,13 +123,41 @@ export async function GET(req: NextRequest) {
     const allArchived = auditLogs ?? [];
     const settingsList = appSettings ?? [];
 
-    // Filter by date range when applicable
+    const profileMap = new Map<
+      string,
+      { username: string; fullName: string; state: string; gender: string }
+    >();
+    for (const p of allProfiles) {
+      profileMap.set(p.id, {
+        username: p.username || "player",
+        fullName: p.full_name || p.username || "Player",
+        state: p.state || "Nigeria",
+        gender: p.gender || "Unspecified",
+      });
+    }
+
+    // Filter by date range and optional sessionFilter
     const filteredProfiles = allProfiles.filter((p) => inDateRange(p.created_at));
-    const filteredEntries = allEntries.filter((e) => inDateRange(e.completed_at || e.joined_at));
-    const filteredAnswers = allAnswers.filter((a) => inDateRange(a.answered_at));
-    const filteredArchived = allArchived.filter((l) => inDateRange(l.created_at));
+    const filteredEntries = allEntries.filter(
+      (e) =>
+        (sessionFilter === "all" || e.session_id === sessionFilter) &&
+        inDateRange(e.completed_at || e.joined_at)
+    );
+    const filteredAnswers = allAnswers.filter(
+      (a) =>
+        (sessionFilter === "all" || a.session_id === sessionFilter) &&
+        inDateRange(a.answered_at)
+    );
+    const filteredArchived = allArchived.filter((l) => {
+      const d = (l.detail ?? {}) as ArchivedDetail;
+      const sid = d.session_id || l.target_id || "";
+      if (sessionFilter !== "all" && sid !== sessionFilter) return false;
+      return inDateRange(l.created_at);
+    });
     const filteredSessions = allSessions.filter(
-      (s) => inDateRange(s.starts_at) || inDateRange(s.ends_at)
+      (s) =>
+        (sessionFilter === "all" || s.id === sessionFilter) &&
+        (inDateRange(s.starts_at) || inDateRange(s.ends_at))
     );
 
     // Map entry -> user_id for answers
@@ -136,7 +166,7 @@ export async function GET(req: NextRequest) {
       entryUserMap.set(e.id, e.user_id);
     }
 
-    // Active players in period (unique players who joined/played or submitted answers in range)
+    // Active players in period
     const activePlayerSet = new Set<string>();
     for (const e of filteredEntries) {
       if (e.user_id) activePlayerSet.add(e.user_id);
@@ -156,7 +186,15 @@ export async function GET(req: NextRequest) {
     }
 
     // Sessions metrics
-    const sessionsToCount = range === "all" ? allSessions : filteredSessions.length > 0 ? filteredSessions : allSessions;
+    const sessionsToCount =
+      range === "all" && sessionFilter === "all"
+        ? allSessions
+        : filteredSessions.length > 0
+        ? filteredSessions
+        : sessionFilter !== "all"
+        ? allSessions.filter((s) => s.id === sessionFilter)
+        : allSessions;
+
     const totalSessions = sessionsToCount.length;
     const completedSessions = sessionsToCount.filter((s) => s.status === "completed").length;
     const activeSessionsCount = sessionsToCount.filter((s) => s.status === "active").length;
@@ -165,21 +203,41 @@ export async function GET(req: NextRequest) {
     const activeSession = allSessions.find((s) => s.status === "active") ?? null;
 
     // Prize money allocated & paid
-    // 1. Sum of prize_pool across sessions
     const totalPrizePoolAllocated = sessionsToCount.reduce(
       (sum, s) => sum + Number(s.prize_pool ?? 0),
       0
     );
 
-    // 2. Check payout_status_<sessionId> in app_settings and prize_awarded on session_entries
     const payoutSettingsBySession = new Map<string, Record<string, string>>();
     for (const row of settingsList) {
       if (row.key.startsWith("payout_status_")) {
         const sid = row.key.replace("payout_status_", "");
         const val = (row.value ?? {}) as { statuses?: Record<string, string> };
-        payoutSettingsBySession.set(sid, val.statuses ?? (row.value as Record<string, string>) ?? {});
+        payoutSettingsBySession.set(
+          sid,
+          val.statuses ?? (row.value as Record<string, string>) ?? {}
+        );
       }
     }
+
+    // Helper to get Best Score per entry in a session
+    const getBestScoreForEntry = (entry: (typeof allEntries)[number]) => {
+      let bestScore = Number(entry.total_score ?? 0);
+      let bestMs = Number(entry.total_response_ms ?? 45000);
+      for (const l of allArchived) {
+        const d = (l.detail ?? {}) as ArchivedDetail;
+        const sid = d.session_id || l.target_id;
+        if (sid === entry.session_id && (d.entry_id === entry.id || l.actor_id === entry.user_id)) {
+          const archScore = Number(d.total_score ?? 0);
+          const archMs = Number(d.total_response_ms ?? 45000);
+          if (archScore > bestScore || (archScore === bestScore && archMs < bestMs)) {
+            bestScore = archScore;
+            bestMs = archMs;
+          }
+        }
+      }
+      return { bestScore, bestMs };
+    };
 
     let totalPrizePaid = 0;
     let paidWinnersCount = 0;
@@ -188,14 +246,19 @@ export async function GET(req: NextRequest) {
     for (const s of sessionsToCount) {
       const sEntries = allEntries
         .filter((e) => e.session_id === s.id)
+        .map((e) => {
+          const { bestScore, bestMs } = getBestScoreForEntry(e);
+          return { ...e, bestScore, bestMs };
+        })
         .sort((a, b) => {
-          const scoreDiff = Number(b.total_score ?? 0) - Number(a.total_score ?? 0);
-          if (scoreDiff !== 0) return scoreDiff;
-          return Number(a.total_response_ms ?? Infinity) - Number(b.total_response_ms ?? Infinity);
+          if (b.bestScore !== a.bestScore) return b.bestScore - a.bestScore;
+          return a.bestMs - b.bestMs;
         });
 
       const statusMap = payoutSettingsBySession.get(s.id) ?? {};
-      const structure = Array.isArray(s.prize_structure) ? (s.prize_structure as PrizeTier[]) : [];
+      const structure = Array.isArray(s.prize_structure)
+        ? (s.prize_structure as PrizeTier[])
+        : [];
 
       sEntries.forEach((e, idx) => {
         const rank = e.final_rank ?? idx + 1;
@@ -205,7 +268,12 @@ export async function GET(req: NextRequest) {
             : getPrizeForRank(rank, structure);
 
         if (awarded > 0) {
-          const st = statusMap[e.user_id] || statusMap[e.id] || (s.status === "completed" && Number(e.prize_awarded ?? 0) > 0 ? "Paid" : "Pending");
+          const st =
+            statusMap[e.user_id] ||
+            statusMap[e.id] ||
+            (s.status === "completed" && Number(e.prize_awarded ?? 0) > 0
+              ? "Paid"
+              : "Pending");
           if (st === "Paid") {
             totalPrizePaid += awarded;
             paidWinnersCount += 1;
@@ -216,6 +284,15 @@ export async function GET(req: NextRequest) {
       });
     }
 
+    // Archived guesses count
+    const archivedGuessesInPeriod = filteredArchived.reduce((sum, l) => {
+      const d = (l.detail ?? {}) as ArchivedDetail;
+      const qCount = Array.isArray(d.answers)
+        ? d.answers.length
+        : Number(d.questions_answered ?? 10);
+      return sum + qCount;
+    }, 0);
+
     // Gameplay performance per session for chart
     const sessionPerformance = allSessions.map((s) => {
       const sEntries = filteredEntries.filter((e) => e.session_id === s.id);
@@ -225,17 +302,20 @@ export async function GET(req: NextRequest) {
         return (d.session_id || l.target_id) === s.id;
       });
 
+      const sArchivedGuesses = sArchived.reduce((sum, l) => {
+        const d = (l.detail ?? {}) as ArchivedDetail;
+        return sum + (Array.isArray(d.answers) ? d.answers.length : Number(d.questions_answered ?? 10));
+      }, 0);
+
       const uniquePlayers = new Set(sEntries.map((e) => e.user_id)).size;
       const totalPlays = sEntries.length + sArchived.length;
-      const scores = [
-        ...sEntries.filter((e) => e.total_score != null).map((e) => Number(e.total_score)),
-        ...sArchived
-          .map((l) => Number(((l.detail ?? {}) as ArchivedDetail).total_score ?? 0))
-          .filter((v) => v > 0),
-      ];
+      const bestScores = sEntries
+        .map((e) => getBestScoreForEntry(e).bestScore)
+        .filter((v) => v > 0);
+
       const avgScore =
-        scores.length > 0
-          ? Number((scores.reduce((sum, v) => sum + v, 0) / scores.length).toFixed(1))
+        bestScores.length > 0
+          ? Number((bestScores.reduce((sum, v) => sum + v, 0) / bestScores.length).toFixed(1))
           : 0;
 
       return {
@@ -248,14 +328,43 @@ export async function GET(req: NextRequest) {
         uniquePlayers,
         totalPlays,
         repeatPlays: Math.max(0, totalPlays - uniquePlayers),
-        guessesSubmitted: sAnswers.length,
+        guessesSubmitted: sAnswers.length + sArchivedGuesses,
         avgScore,
       };
     });
 
+    // Top 5 Contenders by Best Score
+    const topContenders = filteredEntries
+      .map((e) => {
+        const { bestScore, bestMs } = getBestScoreForEntry(e);
+        const p = profileMap.get(e.user_id) ?? {
+          username: "player",
+          fullName: "Player",
+          state: "Nigeria",
+          gender: "Unspecified",
+        };
+        const sName =
+          allSessions.find((s) => s.id === e.session_id)?.name || "Game Session";
+        return {
+          entryId: e.id,
+          userId: e.user_id,
+          username: p.username,
+          fullName: p.fullName,
+          state: p.state,
+          sessionName: sName,
+          bestScore,
+          bestTimeMs: bestMs,
+        };
+      })
+      .sort((a, b) => {
+        if (b.bestScore !== a.bestScore) return b.bestScore - a.bestScore;
+        return a.bestTimeMs - b.bestTimeMs;
+      })
+      .slice(0, 5);
+
     // Recent player registrations
     const recentRegistrations = (range === "all" ? allProfiles : filteredProfiles)
-      .slice(0, 10)
+      .slice(0, 12)
       .map((p) => ({
         id: p.id,
         username: p.username || "player",
@@ -280,7 +389,7 @@ export async function GET(req: NextRequest) {
         totalPlays: filteredEntries.length + filteredArchived.length,
         liveEntries: filteredEntries.length,
         repeatPlays: filteredArchived.length,
-        totalGuessesSubmitted: filteredAnswers.length,
+        totalGuessesSubmitted: filteredAnswers.length + archivedGuessesInPeriod,
         totalQuestionsInBank: allQuestions.length,
         publishedQuestionsCount: allQuestions.filter((q) => q.status === "published").length,
         totalPrizePoolAllocated,
@@ -298,6 +407,7 @@ export async function GET(req: NextRequest) {
           }
         : null,
       sessionPerformance,
+      topContenders,
       recentRegistrations,
     });
   } catch (err) {
