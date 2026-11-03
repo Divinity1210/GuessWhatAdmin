@@ -7,7 +7,7 @@ export async function GET() {
     const { data, error } = await supabase
       .from("support_tickets")
       .select(
-        "*, profiles(id, username, full_name, phone, state), ticket_messages(id, sender_id, body, is_internal, created_at, profiles(username, role))"
+        "*, profiles(id, username, full_name, phone, state), ticket_messages(id, sender_id, body, created_at, profiles(username, role))"
       )
       .order("created_at", { ascending: false })
       .limit(200);
