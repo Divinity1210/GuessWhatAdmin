@@ -8,6 +8,8 @@ type QuestionOption = {
   media_url?: string | null;
   position: number;
   guesses?: number;
+  percentage?: number;
+  avg_response_ms?: number;
   points?: number;
 };
 
@@ -343,6 +345,10 @@ export default function QuestionsPage() {
 
               return opts.map((opt) => {
                 const guesses = opt.guesses ?? 0;
+                const pct = opt.percentage ?? 0;
+                const avgSec = opt.avg_response_ms
+                  ? `${(opt.avg_response_ms / 1000).toFixed(1)}s`
+                  : "—";
                 const pts = opt.points ?? 1;
                 const widthPct = Math.max(Math.round((guesses / maxGuesses) * 100), 4);
                 const isTop = pts === 10;
@@ -373,8 +379,8 @@ export default function QuestionsPage() {
                           style={{ width: `${widthPct}%` }}
                         />
                       </div>
-                      <span className="w-12 text-right font-mono text-xs text-slate-300">
-                        {guesses.toLocaleString()}
+                      <span className="w-28 text-right font-mono text-xs text-slate-300 shrink-0">
+                        {guesses.toLocaleString()} ({pct}%) · {avgSec}
                       </span>
                     </div>
 
@@ -388,7 +394,8 @@ export default function QuestionsPage() {
                             : "bg-white/5 text-slate-300"
                         }`}
                       >
-                        - {pts} {pts === 1 ? "point" : "points"}
+                        {isTop ? "★ " : isBottom ? "▼ " : ""}
+                        {pts} {pts === 1 ? "point" : "points"}
                       </span>
                     </div>
                   </div>

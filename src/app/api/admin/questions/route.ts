@@ -9,20 +9,25 @@ export async function GET() {
         .from("questions")
         .select("*, question_options(*)")
         .order("created_at", { ascending: false }),
-      supabase.from("answers").select("question_id, option_id"),
+      supabase.from("answers").select("question_id, option_id, response_ms"),
     ]);
 
     if (error) {
       return NextResponse.json({ error: error.message }, { status: 500 });
     }
 
-    // Count real-time guesses per option_id
+    // Count real-time guesses and response time per option_id
     const countByOption = new Map<string, number>();
+    const timeByOption = new Map<string, number>();
     for (const ans of answers ?? []) {
       countByOption.set(ans.option_id, (countByOption.get(ans.option_id) ?? 0) + 1);
+      timeByOption.set(
+        ans.option_id,
+        (timeByOption.get(ans.option_id) ?? 0) + Number(ans.response_ms ?? 0)
+      );
     }
 
-    // Enrich each question's options with real-time guesses and ascribed points (10 down to 1) per Page 32
+    // Enrich each question's options with real-time guesses, percentage, avg time, and ascribed points (10 down to 1) per Page 32
     const enriched = (questions ?? []).map((q) => {
       const rawOpts = [...(q.question_options ?? [])].sort(
         (a: { position: number }, b: { position: number }) => a.position - b.position
@@ -47,11 +52,22 @@ export async function GET() {
       return {
         ...q,
         total_guesses: totalQuestionGuesses,
-        question_options: rawOpts.map((opt) => ({
-          ...opt,
-          guesses: countByOption.get(opt.id) ?? 0,
-          points: pointsByOption.get(opt.id) ?? 1,
-        })),
+        question_options: rawOpts.map((opt) => {
+          const guesses = countByOption.get(opt.id) ?? 0;
+          const percentage =
+            totalQuestionGuesses > 0
+              ? Number(((guesses / totalQuestionGuesses) * 100).toFixed(1))
+              : 0;
+          const avg_response_ms =
+            guesses > 0 ? Math.round((timeByOption.get(opt.id) ?? 0) / guesses) : 0;
+          return {
+            ...opt,
+            guesses,
+            percentage,
+            avg_response_ms,
+            points: pointsByOption.get(opt.id) ?? 1,
+          };
+        }),
       };
     });
 

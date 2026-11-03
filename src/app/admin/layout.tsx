@@ -6,6 +6,7 @@ import { ReactNode, useState } from "react";
 
 const navItems = [
   { label: "Overview", href: "/admin", category: "Core" },
+  { label: "Gameplay Analytics", href: "/admin/gameplay", category: "Core" },
   { label: "Brand & Market Data", href: "/admin/insights", category: "Data Monetization" },
   { label: "Questions & Points", href: "/admin/questions", category: "Game Operations" },
   { label: "Game Sessions", href: "/admin/sessions", category: "Game Operations" },
@@ -84,6 +85,11 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
                       }`}
                     >
                       <span>{item.label}</span>
+                      {item.href === "/admin/gameplay" && (
+                        <span className="text-[10px] font-bold uppercase px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300">
+                          LIVE
+                        </span>
+                      )}
                       {item.href === "/admin/insights" && (
                         <span className="text-[10px] font-bold uppercase px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300">
                           CSV

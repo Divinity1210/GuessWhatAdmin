@@ -9,6 +9,8 @@ async function getStats() {
     { count: totalAnswers },
     { count: totalQuestions },
     { data: activeSessionData },
+    { count: totalEntries },
+    { count: archivedReplays },
   ] = await Promise.all([
     sb.from("profiles").select("id", { count: "exact", head: true }),
     sb.from("answers").select("id", { count: "exact", head: true }),
@@ -19,12 +21,19 @@ async function getStats() {
       .eq("status", "active")
       .limit(1)
       .maybeSingle(),
+    sb.from("session_entries").select("id", { count: "exact", head: true }),
+    sb
+      .from("audit_logs")
+      .select("id", { count: "exact", head: true })
+      .eq("action", "gameplay_attempt_archived"),
   ]);
 
   return {
     totalPlayers: totalPlayers ?? 0,
     totalAnswers: totalAnswers ?? 0,
     totalQuestions: totalQuestions ?? 0,
+    totalPlays: (totalEntries ?? 0) + (archivedReplays ?? 0),
+    repeatPlays: archivedReplays ?? 0,
     activeSession: activeSessionData,
   };
 }
@@ -43,16 +52,22 @@ export default async function AdminDashboard() {
             Admin Overview
           </h1>
           <p className="text-slate-400 text-sm mt-1">
-            Manage live sessions, 10-option crowd questions, and export clean consumer data for brands.
+            Monitor real-time gameplay activity, option selection percentages, point distributions, and export reports.
           </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-3">
           <Link
-            href="/admin/insights"
+            href="/admin/gameplay"
             className="px-4 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs sm:text-sm transition-colors"
           >
-            Open Brand &amp; Market Data
+            Gameplay Monitoring &amp; Analytics
+          </Link>
+          <Link
+            href="/admin/insights"
+            className="px-4 py-2.5 rounded-xl bg-emerald-500/15 hover:bg-emerald-500/25 border border-emerald-500/30 text-emerald-300 font-bold text-xs sm:text-sm transition-colors"
+          >
+            Brand &amp; Market Data
           </Link>
           <Link
             href="/admin/questions"
@@ -66,11 +81,13 @@ export default async function AdminDashboard() {
       {/* 4 Essential Metrics */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
         <div className="rounded-2xl p-5 bg-[#0f1219] border border-white/10">
-          <p className="text-xs font-semibold text-slate-400">Total Crowd Responses</p>
+          <p className="text-xs font-semibold text-slate-400">Total Plays &amp; Guesses</p>
           <p className="text-3xl font-extrabold text-amber-400 mt-1 tabular-nums">
-            {stats.totalAnswers.toLocaleString()}
+            {stats.totalPlays.toLocaleString()} <span className="text-sm font-semibold text-slate-400">plays</span>
           </p>
-          <p className="text-[11px] text-slate-500 mt-1">Monetizable preference data points</p>
+          <p className="text-[11px] text-slate-500 mt-1">
+            {stats.totalAnswers.toLocaleString()} live answers · {stats.repeatPlays} repeat plays
+          </p>
         </div>
 
         <div className="rounded-2xl p-5 bg-[#0f1219] border border-white/10">
@@ -103,7 +120,20 @@ export default async function AdminDashboard() {
       </div>
 
       {/* Core Modules */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-5">
+        <Link
+          href="/admin/gameplay"
+          className="rounded-2xl p-6 bg-[#0f1219] border border-amber-500/40 hover:border-amber-500/70 transition-colors space-y-2"
+        >
+          <span className="text-[11px] font-bold uppercase tracking-wider text-amber-400">
+            Live Telemetry
+          </span>
+          <h2 className="text-lg font-bold text-white">Gameplay Monitoring &amp; Analytics</h2>
+          <p className="text-xs text-slate-400 leading-relaxed">
+            Real-time gameplay activity, option selection %, assigned points (10–1), answer times, repeat plays, session comparison, and CSV reports.
+          </p>
+        </Link>
+
         <Link
           href="/admin/insights"
           className="rounded-2xl p-6 bg-[#0f1219] border border-emerald-500/30 hover:border-emerald-500/60 transition-colors space-y-2"
