@@ -174,8 +174,8 @@ export default function AdminDashboard() {
     const chronological = [...sessions].reverse();
     if (chronological.length === 0) {
       return [
-        { label: "S1", guesses: 40, plays: 4, score: 74, players: 3 },
-        { label: "S2", guesses: 90, plays: 9, score: 81, players: 6 },
+        { label: "S1", fullName: "Session 1", status: "completed", guesses: 0, plays: 0, score: 0, players: 0, idx: 0 },
+        { label: "S2", fullName: "Session 2", status: "active", guesses: 0, plays: 0, score: 0, players: 0, idx: 1 },
       ];
     }
     const base = chronological.map((s, idx) => ({
