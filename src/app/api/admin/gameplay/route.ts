@@ -19,7 +19,6 @@ type ArchivedAttemptDetail = {
   final_rank?: number | null;
   started_at?: string;
   completed_at?: string;
-  answers?: { question_id: string; option_id: string; response_ms?: number }[];
 };
 
 export async function GET(req: NextRequest) {
@@ -206,22 +205,7 @@ export async function GET(req: NextRequest) {
       optionStatsByQuestion.set(q.id, oMap);
     }
 
-    // Extract archived attempt answers so option counts & point buckets include all replays
-    const archivedAnswerItems: { question_id: string; option_id: string; response_ms?: number }[] = [];
-    for (const log of archivedAttemptLogs) {
-      const d = (log.detail ?? {}) as ArchivedAttemptDetail;
-      if (Array.isArray(d.answers)) {
-        for (const a of d.answers) {
-          if (!a.question_id || !a.option_id) continue;
-          if (questionFilter !== "all" && a.question_id !== questionFilter) continue;
-          archivedAnswerItems.push(a);
-        }
-      }
-    }
-
-    const allScopedAnswers = [...scopedAnswers, ...archivedAnswerItems];
-
-    for (const ans of allScopedAnswers) {
+    for (const ans of scopedAnswers) {
       let oMap = optionStatsByQuestion.get(ans.question_id);
       if (!oMap) {
         oMap = new Map();
@@ -406,7 +390,7 @@ export async function GET(req: NextRequest) {
     let fastestAnswerMs = Infinity;
     let slowestAnswerMs = 0;
 
-    for (const ans of allScopedAnswers) {
+    for (const ans of scopedAnswers) {
       const optMeta = liveOptionPoints.get(ans.option_id);
       const pts = optMeta?.points ?? 1;
       const ms = Number(ans.response_ms ?? 0);
@@ -422,7 +406,7 @@ export async function GET(req: NextRequest) {
       if (ms > slowestAnswerMs) slowestAnswerMs = ms;
     }
 
-    const totalGuessesCount = allScopedAnswers.length;
+    const totalGuessesCount = scopedAnswers.length;
     const byGuessPoints = Array.from(pointTierBuckets.values()).map((b) => ({
       points: b.points,
       label: b.points === 10 ? "10 pts (Most Selected)" : b.points === 1 ? "1 pt (Least Selected)" : `${b.points} pts`,
@@ -469,8 +453,6 @@ export async function GET(req: NextRequest) {
       state: string;
       attemptNumber: number;
       isReplay: boolean;
-      isBestScoreRun?: boolean;
-      bestScore?: number;
       status: "Completed" | "In Progress" | "Archived Replay";
       questionsAnswered: number;
       totalScore: number;
@@ -482,7 +464,7 @@ export async function GET(req: NextRequest) {
 
     const historicalPlays: HistoricalPlayRow[] = [];
 
-    // Add current session entries + archived prior attempts with Best-Score tracking
+    // Add current session entries
     for (const e of scopedEntries) {
       const p = profileMap.get(e.user_id) ?? {
         username: "player",
@@ -495,39 +477,8 @@ export async function GET(req: NextRequest) {
       const priorList = archivedBySessionUser.get(`${e.session_id}:${e.user_id}`) ?? [];
       const attemptNumber = priorList.length + 1;
       const qCount = ansAgg?.count ?? (e.completed_at ? 10 : 0);
-      // Actual score for the latest/current attempt:
-      const currentAttemptScore =
-        ansAgg && ansAgg.count > 0 ? ansAgg.sumPts : Number(e.total_score ?? 0);
-      const playMs =
-        ansAgg && ansAgg.count > 0 ? ansAgg.sumMs : Number(e.total_response_ms ?? 0);
-
-      // Compute archived attempt scores dynamically as well
-      const computedPrior = priorList.map((arch, idx) => {
-        let dynPts = 0;
-        let dynMs = 0;
-        if (Array.isArray(arch.answers)) {
-          for (const a of arch.answers) {
-            dynPts += liveOptionPoints.get(a.option_id)?.points ?? 1;
-            dynMs += Number(a.response_ms ?? 0);
-          }
-        }
-        const archScore = Math.max(dynPts, Number(arch.total_score ?? 65));
-        const archMs = Number(arch.total_response_ms || dynMs || 45000);
-        return {
-          arch,
-          idx,
-          archScore,
-          archMs,
-          archQ: arch.questions_answered ?? 10,
-          archNum: arch.attempt_number ?? idx + 1,
-        };
-      });
-
-      const playerBestScore = Math.max(
-        currentAttemptScore,
-        Number(e.total_score ?? 0),
-        ...computedPrior.map((cp) => cp.archScore)
-      );
+      const score = e.total_score ?? ansAgg?.sumPts ?? 0;
+      const playMs = e.total_response_ms ?? ansAgg?.sumMs ?? 0;
 
       historicalPlays.push({
         id: `entry_${e.id}`,
@@ -540,11 +491,9 @@ export async function GET(req: NextRequest) {
         state: p.state,
         attemptNumber,
         isReplay: attemptNumber > 1,
-        isBestScoreRun: currentAttemptScore >= playerBestScore,
-        bestScore: playerBestScore,
         status: e.completed_at ? "Completed" : "In Progress",
         questionsAnswered: qCount,
-        totalScore: currentAttemptScore,
+        totalScore: score,
         totalPlayTimeMs: Number(playMs),
         avgQuestionTimeMs: qCount > 0 ? Math.round(Number(playMs) / qCount) : 0,
         rank: e.final_rank ?? null,
@@ -552,7 +501,10 @@ export async function GET(req: NextRequest) {
       });
 
       // Add archived prior attempts for this user/session
-      computedPrior.forEach(({ arch, idx, archScore, archMs, archQ, archNum }) => {
+      priorList.forEach((arch, idx) => {
+        const archQ = arch.questions_answered ?? 10;
+        const archMs = Number(arch.total_response_ms ?? 45000);
+        const archNum = arch.attempt_number ?? idx + 1;
         historicalPlays.push({
           id: `arch_${e.id}_${archNum}_${idx}`,
           entryId: e.id,
@@ -564,11 +516,9 @@ export async function GET(req: NextRequest) {
           state: p.state,
           attemptNumber: archNum,
           isReplay: archNum > 1,
-          isBestScoreRun: archScore >= playerBestScore && archScore > currentAttemptScore,
-          bestScore: playerBestScore,
           status: "Archived Replay",
           questionsAnswered: archQ,
-          totalScore: archScore,
+          totalScore: Number(arch.total_score ?? 65),
           totalPlayTimeMs: archMs,
           avgQuestionTimeMs: archQ > 0 ? Math.round(archMs / archQ) : 0,
           rank: arch.final_rank ?? null,

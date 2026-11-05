@@ -7,38 +7,6 @@ type PrizeTier = {
   amount: number;
 };
 
-type ArchivedAnswerItem = {
-  question_id: string;
-  option_id: string;
-  response_ms?: number;
-};
-
-type ArchivedAttemptDetail = {
-  entry_id?: string;
-  session_id?: string;
-  attempt_number?: number;
-  questions_answered?: number;
-  total_score?: number;
-  total_response_ms?: number;
-  final_rank?: number | null;
-  answers?: ArchivedAnswerItem[];
-  completed_at?: string;
-};
-
-type CalculationStep = {
-  questionNumber: number;
-  questionId: string;
-  questionTitle: string;
-  category: string;
-  pickedOptionId: string;
-  pickedOptionLabel: string;
-  optionTotalPicks: number;
-  optionPercentage: number;
-  consensusRank: number;
-  pointsAwarded: number;
-  responseMs: number;
-};
-
 const DEFAULT_36_STRUCTURE: PrizeTier[] = [
   { rank_from: 1, rank_to: 1, amount: 100000 },
   { rank_from: 2, rank_to: 2, amount: 50000 },
@@ -70,7 +38,6 @@ export async function GET(req: NextRequest) {
       { data: sessionQuestions },
       { data: profiles },
       { data: appSettings },
-      { data: auditLogs },
     ] = await Promise.all([
       supabase
         .from("game_sessions")
@@ -93,11 +60,6 @@ export async function GET(req: NextRequest) {
         .from("profiles")
         .select("id, username, full_name, state, gender"),
       supabase.from("app_settings").select("key, value"),
-      supabase
-        .from("audit_logs")
-        .select("id, actor_id, target_id, detail, created_at")
-        .eq("action", "gameplay_attempt_archived")
-        .order("created_at", { ascending: false }),
     ]);
 
     const allSessions = sessions ?? [];
@@ -134,22 +96,12 @@ export async function GET(req: NextRequest) {
     const disputeKey = `leaderboard_disputes_${sessionId}`;
     const disputeSetting = (appSettings ?? []).find((r) => r.key === disputeKey);
     const disputeMap: Record<string, { status: string; note?: string; updatedAt?: string }> =
-      ((disputeSetting?.value as {
-        disputes?: Record<string, { status: string; note?: string; updatedAt?: string }>;
-      })?.disputes ??
-        (disputeSetting?.value as Record<
-          string,
-          { status: string; note?: string; updatedAt?: string }
-        >) ??
+      ((disputeSetting?.value as { disputes?: Record<string, { status: string; note?: string; updatedAt?: string }> })
+        ?.disputes ??
+        (disputeSetting?.value as Record<string, { status: string; note?: string; updatedAt?: string }>) ??
         {});
 
-    // Filter archived logs for this session
-    const sessionArchivedLogs = (auditLogs ?? []).filter((log) => {
-      const d = (log.detail ?? {}) as ArchivedAttemptDetail;
-      return (d.session_id || log.target_id) === sessionId;
-    });
-
-    // Build question and option consensus rankings for this session (live answers + archived replay answers)
+    // Build question and option consensus rankings for this session
     const sessionAnswers = (answers ?? []).filter((a) => a.session_id === sessionId);
     const optionPickCounts = new Map<string, number>();
     const questionTotalPicks = new Map<string, number>();
@@ -157,26 +109,6 @@ export async function GET(req: NextRequest) {
     for (const a of sessionAnswers) {
       optionPickCounts.set(a.option_id, (optionPickCounts.get(a.option_id) ?? 0) + 1);
       questionTotalPicks.set(a.question_id, (questionTotalPicks.get(a.question_id) ?? 0) + 1);
-    }
-
-    let archivedAnswerCount = 0;
-    for (const log of sessionArchivedLogs) {
-      const d = (log.detail ?? {}) as ArchivedAttemptDetail;
-      if (Array.isArray(d.answers)) {
-        for (const ans of d.answers) {
-          if (ans.option_id && ans.question_id) {
-            optionPickCounts.set(
-              ans.option_id,
-              (optionPickCounts.get(ans.option_id) ?? 0) + 1
-            );
-            questionTotalPicks.set(
-              ans.question_id,
-              (questionTotalPicks.get(ans.question_id) ?? 0) + 1
-            );
-            archivedAnswerCount += 1;
-          }
-        }
-      }
     }
 
     const questionMeta = new Map<
@@ -243,43 +175,42 @@ export async function GET(req: NextRequest) {
       }
     }
 
-    const buildBreakdownFromAnswerList = (
-      rawList: { question_id: string; option_id: string; response_ms?: number }[]
-    ): CalculationStep[] => {
-      const steps: CalculationStep[] = rawList.map((ans, idx) => {
-        const q = questionMeta.get(ans.question_id);
-        const opt = optionConsensus.get(ans.option_id);
-        return {
-          questionNumber: sqOrder.get(ans.question_id) ?? idx + 1,
-          questionId: ans.question_id,
-          questionTitle: q?.title || "Question",
-          category: q?.category || "General",
-          pickedOptionId: ans.option_id,
-          pickedOptionLabel: opt?.label || "Selected Option",
-          optionTotalPicks: opt?.picks ?? 1,
-          optionPercentage: opt?.percentage ?? 0,
-          consensusRank: opt?.consensusRank ?? 1,
-          pointsAwarded: opt?.pointsAwarded ?? 1,
-          responseMs: Number(ans.response_ms ?? 0),
-        };
-      });
-      return steps.sort((a, b) => a.questionNumber - b.questionNumber);
-    };
-
-    // Group live answers by entry_id
-    const answersByEntry = new Map<string, CalculationStep[]>();
-    const rawAnswersByEntry = new Map<
+    // Group answers by entry_id for per-player calculation breakdown
+    const answersByEntry = new Map<
       string,
-      { question_id: string; option_id: string; response_ms?: number }[]
+      {
+        questionNumber: number;
+        questionId: string;
+        questionTitle: string;
+        category: string;
+        pickedOptionId: string;
+        pickedOptionLabel: string;
+        optionTotalPicks: number;
+        optionPercentage: number;
+        consensusRank: number;
+        pointsAwarded: number;
+        responseMs: number;
+      }[]
     >();
 
     for (const ans of sessionAnswers) {
-      const list = rawAnswersByEntry.get(ans.entry_id) ?? [];
-      list.push(ans);
-      rawAnswersByEntry.set(ans.entry_id, list);
-    }
-    for (const [entryId, list] of rawAnswersByEntry.entries()) {
-      answersByEntry.set(entryId, buildBreakdownFromAnswerList(list));
+      const q = questionMeta.get(ans.question_id);
+      const opt = optionConsensus.get(ans.option_id);
+      const list = answersByEntry.get(ans.entry_id) ?? [];
+      list.push({
+        questionNumber: sqOrder.get(ans.question_id) ?? list.length + 1,
+        questionId: ans.question_id,
+        questionTitle: q?.title || "Question",
+        category: q?.category || "General",
+        pickedOptionId: ans.option_id,
+        pickedOptionLabel: opt?.label || "Selected Option",
+        optionTotalPicks: opt?.picks ?? 1,
+        optionPercentage: opt?.percentage ?? 0,
+        consensusRank: opt?.consensusRank ?? 1,
+        pointsAwarded: opt?.pointsAwarded ?? 1,
+        responseMs: Number(ans.response_ms ?? 0),
+      });
+      answersByEntry.set(ans.entry_id, list);
     }
 
     const sessionEntries = (entries ?? []).filter((e) => e.session_id === sessionId);
@@ -289,99 +220,17 @@ export async function GET(req: NextRequest) {
         : DEFAULT_36_STRUCTURE;
 
     const computedRows = sessionEntries.map((e) => {
-      const currentBreakdown = answersByEntry.get(e.id) ?? [];
-      const currentScore =
-        currentBreakdown.length > 0
-          ? currentBreakdown.reduce((sum, b) => sum + b.pointsAwarded, 0)
-          : Number(e.total_score ?? 0);
-      const currentTimeMs =
-        currentBreakdown.length > 0
-          ? currentBreakdown.reduce((sum, b) => sum + b.responseMs, 0)
-          : Number(e.total_response_ms ?? 0);
-
-      // Inspect all archived attempts for this player in this session
-      const playerArchivedLogs = sessionArchivedLogs.filter((l) => {
-        const d = (l.detail ?? {}) as ArchivedAttemptDetail;
-        return d.entry_id === e.id || l.actor_id === e.user_id;
-      });
-
-      type CandidateAttempt = {
-        score: number;
-        totalTimeMs: number;
-        breakdown: CalculationStep[];
-        guessesCount: number;
-        isFromArchive: boolean;
-      };
-
-      const candidates: CandidateAttempt[] = [];
-
-      if (currentBreakdown.length > 0 || e.total_score != null) {
-        candidates.push({
-          score: currentScore,
-          totalTimeMs: currentTimeMs > 0 ? currentTimeMs : 45000,
-          breakdown: currentBreakdown,
-          guessesCount: currentBreakdown.length > 0 ? currentBreakdown.length : e.completed_at ? 10 : 0,
-          isFromArchive: false,
-        });
-      }
-
-      // Also include stored e.total_score if higher (e.g. if DB already preserved best score)
-      if (
-        e.total_score != null &&
-        Number(e.total_score) > currentScore
-      ) {
-        candidates.push({
-          score: Number(e.total_score),
-          totalTimeMs: Number(e.total_response_ms ?? (currentTimeMs || 45000)),
-          breakdown: currentBreakdown,
-          guessesCount: 10,
-          isFromArchive: true,
-        });
-      }
-
-      for (const log of playerArchivedLogs) {
-        const d = (log.detail ?? {}) as ArchivedAttemptDetail;
-        const archBreakdown = Array.isArray(d.answers) && d.answers.length > 0
-          ? buildBreakdownFromAnswerList(d.answers)
-          : currentBreakdown;
-        const dynScore =
-          archBreakdown.length > 0
-            ? archBreakdown.reduce((sum, b) => sum + b.pointsAwarded, 0)
-            : 0;
-        const bestArchScore = Math.max(dynScore, Number(d.total_score ?? 0));
-        const dynTimeMs =
-          archBreakdown.length > 0
-            ? archBreakdown.reduce((sum, b) => sum + b.responseMs, 0)
-            : 0;
-        const archTimeMs = Number(d.total_response_ms || dynTimeMs || 45000);
-
-        candidates.push({
-          score: bestArchScore,
-          totalTimeMs: archTimeMs,
-          breakdown: archBreakdown,
-          guessesCount: Number(d.questions_answered ?? (archBreakdown.length || 10)),
-          isFromArchive: true,
-        });
-      }
-
-      // Sort candidates: highest score first, shortest totalTimeMs tie-breaker
-      candidates.sort((a, b) => {
-        if (b.score !== a.score) return b.score - a.score;
-        return a.totalTimeMs - b.totalTimeMs;
-      });
-
-      const bestAttempt: CandidateAttempt = candidates[0] ?? {
-        score: currentScore,
-        totalTimeMs: currentTimeMs,
-        breakdown: currentBreakdown,
-        guessesCount: currentBreakdown.length,
-        isFromArchive: false,
-      };
-
-      const attemptsCount = Math.max(
-        1,
-        playerArchivedLogs.length + (currentBreakdown.length > 0 || e.completed_at ? 1 : 0)
+      const breakdown = (answersByEntry.get(e.id) ?? []).sort(
+        (a, b) => a.questionNumber - b.questionNumber
       );
+      const calcPoints = breakdown.reduce((sum, b) => sum + b.pointsAwarded, 0);
+      const calcTimeMs = breakdown.reduce((sum, b) => sum + b.responseMs, 0);
+
+      const finalScore =
+        breakdown.length > 0 ? calcPoints : Number(e.total_score ?? 0);
+      const finalTimeMs =
+        breakdown.length > 0 ? calcTimeMs : Number(e.total_response_ms ?? 0);
+      const guessesCount = breakdown.length > 0 ? breakdown.length : e.completed_at ? 10 : 0;
 
       const prof = profileMap.get(e.user_id) ?? {
         username: "player",
@@ -403,24 +252,19 @@ export async function GET(req: NextRequest) {
         state: prof.state,
         gender: prof.gender,
         storedRank: e.final_rank ?? null,
-        score: bestAttempt.score,
-        latestScore: currentScore > 0 ? currentScore : bestAttempt.score,
-        latestTimeMs: currentTimeMs > 0 ? currentTimeMs : bestAttempt.totalTimeMs,
-        attemptsCount,
-        isBestFromPriorAttempt:
-          bestAttempt.isFromArchive && currentScore > 0 && bestAttempt.score > currentScore,
+        score: finalScore,
         storedScore: e.total_score ?? null,
-        totalTimeMs: bestAttempt.totalTimeMs,
-        guessesSubmitted: bestAttempt.guessesCount,
+        totalTimeMs: finalTimeMs,
+        guessesSubmitted: guessesCount,
         completedAt: e.completed_at || e.joined_at,
         disputeStatus: disp.status || "Clear",
         disputeNote: disp.note || "",
-        calculationBreakdown: bestAttempt.breakdown,
+        calculationBreakdown: breakdown,
         storedPrize: Number(e.prize_awarded ?? 0),
       };
     });
 
-    // Sort by Best Score DESC, then Best Total Time Taken (ms) ASC (Page 39 Tie-Breaker Rule)
+    // Sort by Score DESC, then Total Time Taken (ms) ASC (Page 39 Tie-Breaker Rule)
     computedRows.sort((a, b) => {
       if (b.score !== a.score) return b.score - a.score;
       return a.totalTimeMs - b.totalTimeMs;
@@ -469,10 +313,9 @@ export async function GET(req: NextRequest) {
       },
       summary: {
         totalParticipants: computedRows.length,
-        totalGuessesInSession: sessionAnswers.length + archivedAnswerCount,
+        totalGuessesInSession: sessionAnswers.length,
         disputedCount: computedRows.filter((r) => r.disputeStatus !== "Clear").length,
         topScore: computedRows[0]?.score ?? 0,
-        multiAttemptPlayersCount: computedRows.filter((r) => r.attemptsCount > 1).length,
       },
       leaderboard,
     });
@@ -523,46 +366,26 @@ export async function PATCH(req: NextRequest) {
     }
 
     if (action === "recalculate_and_publish") {
-      // Recalculate Best-Score consensus points (10..1) and millisecond tie-breakers and persist to session_entries + leaderboards
+      // Recalculate consensus points (10..1) and millisecond tie-breakers and persist to session_entries
       const [
         { data: session },
         { data: entries },
         { data: answers },
         { data: questions },
-        { data: auditLogs },
       ] = await Promise.all([
         supabase.from("game_sessions").select("*").eq("id", sessionId).single(),
         supabase.from("session_entries").select("*").eq("session_id", sessionId),
         supabase.from("answers").select("*").eq("session_id", sessionId),
         supabase.from("questions").select("id, question_options(id, position)"),
-        supabase
-          .from("audit_logs")
-          .select("id, actor_id, target_id, detail")
-          .eq("action", "gameplay_attempt_archived"),
       ]);
 
       if (!session) {
         return NextResponse.json({ error: "Session not found" }, { status: 404 });
       }
 
-      const sessionArchived = (auditLogs ?? []).filter((l) => {
-        const d = (l.detail ?? {}) as ArchivedAttemptDetail;
-        return (d.session_id || l.target_id) === sessionId;
-      });
-
       const optionPicks = new Map<string, number>();
       for (const a of answers ?? []) {
         optionPicks.set(a.option_id, (optionPicks.get(a.option_id) ?? 0) + 1);
-      }
-      for (const l of sessionArchived) {
-        const d = (l.detail ?? {}) as ArchivedAttemptDetail;
-        if (Array.isArray(d.answers)) {
-          for (const ans of d.answers) {
-            if (ans.option_id) {
-              optionPicks.set(ans.option_id, (optionPicks.get(ans.option_id) ?? 0) + 1);
-            }
-          }
-        }
       }
 
       const optionPts = new Map<string, number>();
@@ -589,42 +412,10 @@ export async function PATCH(req: NextRequest) {
 
       const scored = (entries ?? []).map((e) => {
         const agg = entryAgg.get(e.id);
-        let bestScore = Math.max(agg ? agg.score : 0, Number(e.total_score ?? 0));
-        let bestMs =
-          agg && agg.score >= Number(e.total_score ?? 0) && agg.ms > 0
-            ? agg.ms
-            : Number(e.total_response_ms ?? (agg?.ms || 45000));
-
-        const pArch = sessionArchived.filter((l) => {
-          const d = (l.detail ?? {}) as ArchivedAttemptDetail;
-          return d.entry_id === e.id || l.actor_id === e.user_id;
-        });
-
-        for (const log of pArch) {
-          const d = (log.detail ?? {}) as ArchivedAttemptDetail;
-          let archDynScore = 0;
-          let archDynMs = 0;
-          if (Array.isArray(d.answers)) {
-            for (const ans of d.answers) {
-              archDynScore += optionPts.get(ans.option_id) ?? 1;
-              archDynMs += Number(ans.response_ms ?? 0);
-            }
-          }
-          const candScore = Math.max(archDynScore, Number(d.total_score ?? 0));
-          const candMs = Number(d.total_response_ms || archDynMs || 45000);
-          if (
-            candScore > bestScore ||
-            (candScore === bestScore && candMs < bestMs)
-          ) {
-            bestScore = candScore;
-            bestMs = candMs;
-          }
-        }
-
         return {
           ...e,
-          calc_score: bestScore,
-          calc_ms: bestMs,
+          calc_score: agg ? agg.score : Number(e.total_score ?? 0),
+          calc_ms: agg ? agg.ms : Number(e.total_response_ms ?? 0),
         };
       });
 
@@ -651,22 +442,6 @@ export async function PATCH(req: NextRequest) {
             prize_awarded: prize,
           })
           .eq("id", row.id);
-
-        await supabase
-          .from("leaderboards")
-          .upsert(
-            {
-              session_id: sessionId,
-              user_id: row.user_id,
-              total_score: row.calc_score,
-              total_response_ms: row.calc_ms,
-              rank,
-              prize_won: prize,
-              updated_at: new Date().toISOString(),
-            },
-            { onConflict: "session_id,user_id" }
-          )
-          .select();
       }
 
       return NextResponse.json({ ok: true, updatedCount: scored.length });
