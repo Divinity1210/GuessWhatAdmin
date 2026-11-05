@@ -505,13 +505,14 @@ export async function GET(req: NextRequest) {
       const computedPrior = priorList.map((arch, idx) => {
         let dynPts = 0;
         let dynMs = 0;
-        if (Array.isArray(arch.answers)) {
-          for (const a of arch.answers) {
+        const hasArchAnswers = Array.isArray(arch.answers) && arch.answers.length > 0;
+        if (hasArchAnswers) {
+          for (const a of arch.answers!) {
             dynPts += liveOptionPoints.get(a.option_id)?.points ?? 1;
             dynMs += Number(a.response_ms ?? 0);
           }
         }
-        const archScore = Math.max(dynPts, Number(arch.total_score ?? 65));
+        const archScore = hasArchAnswers ? dynPts : Number(arch.total_score ?? 65);
         const archMs = Number(arch.total_response_ms || dynMs || 45000);
         return {
           arch,
@@ -525,7 +526,6 @@ export async function GET(req: NextRequest) {
 
       const playerBestScore = Math.max(
         currentAttemptScore,
-        Number(e.total_score ?? 0),
         ...computedPrior.map((cp) => cp.archScore)
       );
 

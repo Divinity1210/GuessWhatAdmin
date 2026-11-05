@@ -315,7 +315,10 @@ export async function GET(req: NextRequest) {
 
       const candidates: CandidateAttempt[] = [];
 
-      if (currentBreakdown.length > 0 || e.total_score != null) {
+      if (
+        currentBreakdown.length > 0 ||
+        (playerArchivedLogs.length === 0 && e.total_score != null)
+      ) {
         candidates.push({
           score: currentScore,
           totalTimeMs: currentTimeMs > 0 ? currentTimeMs : 45000,
@@ -325,30 +328,18 @@ export async function GET(req: NextRequest) {
         });
       }
 
-      // Also include stored e.total_score if higher (e.g. if DB already preserved best score)
-      if (
-        e.total_score != null &&
-        Number(e.total_score) > currentScore
-      ) {
-        candidates.push({
-          score: Number(e.total_score),
-          totalTimeMs: Number(e.total_response_ms ?? (currentTimeMs || 45000)),
-          breakdown: currentBreakdown,
-          guessesCount: 10,
-          isFromArchive: true,
-        });
-      }
-
       for (const log of playerArchivedLogs) {
         const d = (log.detail ?? {}) as ArchivedAttemptDetail;
-        const archBreakdown = Array.isArray(d.answers) && d.answers.length > 0
-          ? buildBreakdownFromAnswerList(d.answers)
+        const hasArchAnswers = Array.isArray(d.answers) && d.answers.length > 0;
+        const archBreakdown = hasArchAnswers
+          ? buildBreakdownFromAnswerList(d.answers!)
           : currentBreakdown;
         const dynScore =
           archBreakdown.length > 0
             ? archBreakdown.reduce((sum, b) => sum + b.pointsAwarded, 0)
             : 0;
-        const bestArchScore = Math.max(dynScore, Number(d.total_score ?? 0));
+        // Always use live dynamic crowd-consensus score when answers exist so scores move up OR down as votes change
+        const bestArchScore = hasArchAnswers ? dynScore : Number(d.total_score ?? dynScore);
         const dynTimeMs =
           archBreakdown.length > 0
             ? archBreakdown.reduce((sum, b) => sum + b.responseMs, 0)

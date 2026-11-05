@@ -240,11 +240,11 @@ export async function GET(req: NextRequest) {
       const currentTimeMs =
         agg && agg.count > 0 ? agg.ms : Number(e.total_response_ms ?? 0);
 
-      let bestScore = Math.max(currentScore, Number(e.total_score ?? 0));
+      let bestScore = currentScore;
       let bestTimeMs =
-        currentScore >= Number(e.total_score ?? 0) && currentTimeMs > 0
+        currentTimeMs > 0
           ? currentTimeMs
-          : Number(e.total_response_ms ?? (currentTimeMs || 45000));
+          : Number(e.total_response_ms ?? 45000);
 
       const playerArch = sessionArchived.filter((l) => {
         const d = (l.detail ?? {}) as ArchivedAttemptDetail;
@@ -255,13 +255,14 @@ export async function GET(req: NextRequest) {
         const d = (log.detail ?? {}) as ArchivedAttemptDetail;
         let archDynScore = 0;
         let archDynMs = 0;
-        if (Array.isArray(d.answers)) {
-          for (const ans of d.answers) {
+        const hasArchAnswers = Array.isArray(d.answers) && d.answers.length > 0;
+        if (hasArchAnswers) {
+          for (const ans of d.answers!) {
             archDynScore += optionPts.get(ans.option_id) ?? 1;
             archDynMs += Number(ans.response_ms ?? 0);
           }
         }
-        const candScore = Math.max(archDynScore, Number(d.total_score ?? 0));
+        const candScore = hasArchAnswers ? archDynScore : Number(d.total_score ?? 0);
         const candMs = Number(d.total_response_ms || archDynMs || 45000);
         if (
           candScore > bestScore ||
