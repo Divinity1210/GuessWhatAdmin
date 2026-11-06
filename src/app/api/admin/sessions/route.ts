@@ -249,11 +249,17 @@ async function scoreAndPublishSession(sessionId: string) {
     { data: entries },
     { data: answers },
     { data: questions },
+    { data: archivedLogs },
   ] = await Promise.all([
     supabase.from("game_sessions").select("*").eq("id", sessionId).single(),
     supabase.from("session_entries").select("*").eq("session_id", sessionId),
     supabase.from("answers").select("*").eq("session_id", sessionId),
     supabase.from("questions").select("id, question_options(id, position)"),
+    supabase
+      .from("audit_logs")
+      .select("actor_id, detail")
+      .eq("target_id", sessionId)
+      .eq("action", "gameplay_attempt_archived"),
   ]);
 
   if (!session) return;
@@ -261,6 +267,17 @@ async function scoreAndPublishSession(sessionId: string) {
   const optionCount = new Map<string, number>();
   for (const a of answers ?? []) {
     optionCount.set(a.option_id, (optionCount.get(a.option_id) ?? 0) + 1);
+  }
+  for (const log of archivedLogs ?? []) {
+    const detail = (log.detail ?? {}) as {
+      entry_id?: string;
+      answers?: { question_id?: string; option_id?: string; response_ms?: number }[];
+    };
+    for (const a of detail.answers ?? []) {
+      if (a.option_id) {
+        optionCount.set(a.option_id, (optionCount.get(a.option_id) ?? 0) + 1);
+      }
+    }
   }
 
   const optionPoints = new Map<string, number>();
@@ -277,20 +294,67 @@ async function scoreAndPublishSession(sessionId: string) {
     });
   }
 
-  const answersByEntry = new Map<string, { score: number; ms: number }>();
+  const answersByEntry = new Map<string, { score: number; ms: number; count: number }>();
   for (const a of answers ?? []) {
-    const cur = answersByEntry.get(a.entry_id) ?? { score: 0, ms: 0 };
+    const cur = answersByEntry.get(a.entry_id) ?? { score: 0, ms: 0, count: 0 };
     cur.score += optionPoints.get(a.option_id) ?? 1;
     cur.ms += Number(a.response_ms ?? 0);
+    cur.count += 1;
     answersByEntry.set(a.entry_id, cur);
   }
 
   const scoredEntries = (entries ?? []).map((e) => {
     const agg = answersByEntry.get(e.id);
+    const myArch = (archivedLogs ?? []).filter((l) => {
+      const d = (l.detail ?? {}) as { entry_id?: string };
+      return d.entry_id === e.id || l.actor_id === e.user_id;
+    });
+
+    const candidates: { score: number; ms: number }[] = [];
+    if (agg && agg.count > 0) {
+      candidates.push({ score: agg.score, ms: agg.ms });
+    }
+    for (const arch of myArch) {
+      const d = (arch.detail ?? {}) as {
+        total_score?: number;
+        total_response_ms?: number;
+        answers?: { option_id?: string; response_ms?: number }[];
+      };
+      const archAns = Array.isArray(d.answers) ? d.answers : [];
+      if (archAns.length > 0) {
+        const dynScore = archAns.reduce(
+          (s, a) => s + (a.option_id ? optionPoints.get(a.option_id) ?? 1 : 1),
+          0
+        );
+        const dynMs = archAns.reduce((s, a) => s + Number(a.response_ms ?? 0), 0);
+        candidates.push({
+          score: dynScore,
+          ms: Number(d.total_response_ms || dynMs || 0),
+        });
+      } else if (Number(d.total_score ?? 0) > 0) {
+        candidates.push({
+          score: Number(d.total_score ?? 0),
+          ms: Number(d.total_response_ms ?? 0),
+        });
+      }
+    }
+    if (candidates.length === 0 && Number(e.total_score ?? 0) > 0) {
+      candidates.push({
+        score: Number(e.total_score ?? 0),
+        ms: Number(e.total_response_ms ?? 0),
+      });
+    }
+
+    candidates.sort((a, b) => {
+      if (b.score !== a.score) return b.score - a.score;
+      return a.ms - b.ms;
+    });
+
+    const best = candidates[0] ?? { score: 0, ms: 0 };
     return {
       ...e,
-      computed_score: agg ? agg.score : Number(e.total_score ?? 0),
-      computed_ms: agg ? agg.ms : Number(e.total_response_ms ?? 0),
+      computed_score: best.score,
+      computed_ms: best.ms,
     };
   });
 
@@ -304,10 +368,27 @@ async function scoreAndPublishSession(sessionId: string) {
       ? (session.prize_structure as PrizeTier[])
       : PRESET_36_WINNERS;
 
+  const lbRows: {
+    session_id: string;
+    user_id: string;
+    rank: number;
+    points: number;
+    response_ms: number;
+    prize: number;
+  }[] = [];
+
   for (let i = 0; i < scoredEntries.length; i++) {
     const e = scoredEntries[i];
     const rank = i + 1;
     const prize = getPrizeForRank(rank, structure);
+    lbRows.push({
+      session_id: sessionId,
+      user_id: e.user_id,
+      rank,
+      points: e.computed_score,
+      response_ms: e.computed_ms,
+      prize,
+    });
     await supabase
       .from("session_entries")
       .update({
@@ -318,6 +399,11 @@ async function scoreAndPublishSession(sessionId: string) {
         completed_at: e.completed_at || new Date().toISOString(),
       })
       .eq("id", e.id);
+  }
+
+  await supabase.from("leaderboards").delete().eq("session_id", sessionId);
+  if (lbRows.length > 0) {
+    await supabase.from("leaderboards").insert(lbRows);
   }
 
   await supabase
