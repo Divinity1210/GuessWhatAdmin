@@ -407,6 +407,46 @@ export async function PATCH(req: NextRequest) {
         return NextResponse.json({ error: uErr.message }, { status: 500 });
       }
 
+      // Sync prize_awarded and leaderboards.prize when prize_structure changes
+      if (updates.prize_structure) {
+        const nextStructure = updates.prize_structure as PrizeTier[];
+        const [{ data: entries }, { data: lbRows }] = await Promise.all([
+          supabase
+            .from("session_entries")
+            .select("id, total_score, total_response_ms, final_rank")
+            .eq("session_id", id),
+          supabase
+            .from("leaderboards")
+            .select("user_id, rank")
+            .eq("session_id", id),
+        ]);
+
+        const sorted = [...(entries ?? [])].sort((a, b) => {
+          const diff = Number(b.total_score ?? 0) - Number(a.total_score ?? 0);
+          if (diff !== 0) return diff;
+          return Number(a.total_response_ms ?? Infinity) - Number(b.total_response_ms ?? Infinity);
+        });
+
+        await Promise.all([
+          ...sorted.map((entry, idx) => {
+            const rank = idx + 1;
+            const prize = getPrizeForRank(rank, nextStructure);
+            return supabase
+              .from("session_entries")
+              .update({ final_rank: rank, prize_awarded: prize })
+              .eq("id", entry.id);
+          }),
+          ...(lbRows ?? []).map((lb) => {
+            const prize = getPrizeForRank(Number(lb.rank), nextStructure);
+            return supabase
+              .from("leaderboards")
+              .update({ prize })
+              .eq("session_id", id)
+              .eq("user_id", lb.user_id);
+          }),
+        ]);
+      }
+
       if (Array.isArray(selectedQuestionIds) && selectedQuestionIds.length > 0) {
         await supabase.from("session_questions").delete().eq("session_id", id);
         const sqRows = selectedQuestionIds.map((qid: string, idx: number) => ({

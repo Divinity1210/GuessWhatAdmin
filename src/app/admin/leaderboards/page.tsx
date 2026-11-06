@@ -76,6 +76,36 @@ export default function AdminLeaderboardsPage() {
 
   // Calculation Audit Modal State
   const [inspectingPlayer, setInspectingPlayer] = useState<LeaderboardRow | null>(null);
+  const [editingRankPrize, setEditingRankPrize] = useState<number | null>(null);
+  const [editingRankAmount, setEditingRankAmount] = useState<string>("");
+  const [savingRankPrize, setSavingRankPrize] = useState<boolean>(false);
+
+  const handleSavePositionPrize = async (position: number, amount: number) => {
+    const sid = selectedSessionId || activeSession?.id;
+    if (!sid) return;
+    setSavingRankPrize(true);
+    try {
+      const res = await fetch("/api/admin/winners", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sessionId: sid,
+          action: "update_position_prize",
+          position,
+          amount: Math.max(0, Number(amount) || 0),
+        }),
+      });
+      if (res.ok) {
+        setEditingRankPrize(null);
+        showToastMsg(
+          `Updated position #${position} prize money to ₦${Number(amount).toLocaleString()}!`
+        );
+        await fetchLeaderboard();
+      }
+    } finally {
+      setSavingRankPrize(false);
+    }
+  };
 
   // Read initial ?sessionId from window location on mount
   useEffect(() => {
@@ -434,12 +464,62 @@ export default function AdminLeaderboardsPage() {
                         )}
                       </td>
                       <td className="px-4 py-3.5 font-mono text-xs font-bold">
-                        {row.allocatedPrize > 0 ? (
-                          <span className="text-emerald-400">
-                            ₦{row.allocatedPrize.toLocaleString()}
-                          </span>
+                        {editingRankPrize === row.rank ? (
+                          <div className="flex items-center gap-1.5">
+                            <label htmlFor={`lb-prize-rank-${row.rank}`} className="sr-only">
+                              Prize money for position #{row.rank}
+                            </label>
+                            <input
+                              id={`lb-prize-rank-${row.rank}`}
+                              type="number"
+                              min={0}
+                              inputMode="numeric"
+                              value={editingRankAmount}
+                              onChange={(e) => setEditingRankAmount(e.target.value)}
+                              className="w-24 rounded-lg border border-amber-500 bg-[#0a0d14] px-2 py-1 text-xs font-mono font-bold text-amber-300"
+                            />
+                            <button
+                              type="button"
+                              disabled={savingRankPrize}
+                              onClick={() =>
+                                handleSavePositionPrize(
+                                  row.rank,
+                                  Number(editingRankAmount)
+                                )
+                              }
+                              className="px-2 py-1 rounded bg-emerald-500 text-slate-950 text-[10px] font-extrabold"
+                            >
+                              {savingRankPrize ? "..." : "Save"}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setEditingRankPrize(null)}
+                              className="px-1.5 py-1 rounded bg-white/10 text-slate-300 text-[10px] font-bold"
+                            >
+                              ✕
+                            </button>
+                          </div>
                         ) : (
-                          <span className="text-slate-500">—</span>
+                          <div className="flex items-center gap-2">
+                            {row.allocatedPrize > 0 ? (
+                              <span className="text-emerald-400">
+                                ₦{row.allocatedPrize.toLocaleString()}
+                              </span>
+                            ) : (
+                              <span className="text-slate-500">—</span>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => {
+                                setEditingRankPrize(row.rank);
+                                setEditingRankAmount(String(row.allocatedPrize ?? 0));
+                              }}
+                              title={`Edit prize money for position #${row.rank}`}
+                              className="px-2 py-0.5 rounded bg-white/5 hover:bg-white/10 text-[10px] font-sans font-semibold text-amber-300 border border-amber-500/30"
+                            >
+                              ✎ Edit
+                            </button>
+                          </div>
                         )}
                       </td>
                       <td className="px-4 py-3.5">

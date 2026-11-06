@@ -19,6 +19,72 @@ type PrizeTier = {
   amount: number;
 };
 
+type PositionPrize = {
+  position: number;
+  amount: number;
+};
+
+const PRESET_36_TIERS: PrizeTier[] = [
+  { rank_from: 1, rank_to: 1, amount: 100000 },
+  { rank_from: 2, rank_to: 2, amount: 50000 },
+  { rank_from: 3, rank_to: 3, amount: 20000 },
+  { rank_from: 4, rank_to: 36, amount: 10000 },
+];
+
+const PRESET_49_TIERS: PrizeTier[] = [
+  { rank_from: 1, rank_to: 1, amount: 100000 },
+  { rank_from: 2, rank_to: 2, amount: 50000 },
+  { rank_from: 3, rank_to: 3, amount: 20000 },
+  { rank_from: 4, rank_to: 23, amount: 10000 },
+  { rank_from: 24, rank_to: 49, amount: 5000 },
+];
+
+function formatOrdinal(n: number): string {
+  const s = ["th", "st", "nd", "rd"];
+  const v = n % 100;
+  return n + (s[(v - 20) % 10] || s[v] || s[0]);
+}
+
+function expandTiersToPositions(tiers: PrizeTier[], count?: number): PositionPrize[] {
+  const safeTiers = Array.isArray(tiers) && tiers.length > 0 ? tiers : PRESET_36_TIERS;
+  const maxRank =
+    count !== undefined && count > 0
+      ? count
+      : Math.max(...safeTiers.map((t) => Number(t.rank_to ?? 0)), 36);
+  const result: PositionPrize[] = [];
+  for (let p = 1; p <= maxRank; p++) {
+    const matched = safeTiers.find(
+      (t) => p >= Number(t.rank_from) && p <= Number(t.rank_to)
+    );
+    const fallbackAmt =
+      safeTiers[safeTiers.length - 1]?.amount ?? 10000;
+    result.push({
+      position: p,
+      amount: matched ? Number(matched.amount) : Number(fallbackAmt),
+    });
+  }
+  return result;
+}
+
+function compressPositionsToTiers(positions: PositionPrize[]): PrizeTier[] {
+  const tiers: PrizeTier[] = [];
+  const sorted = [...positions].sort((a, b) => a.position - b.position);
+  for (const item of sorted) {
+    const amt = Math.max(0, Number(item.amount) || 0);
+    const last = tiers[tiers.length - 1];
+    if (last && last.amount === amt && last.rank_to === item.position - 1) {
+      last.rank_to = item.position;
+    } else {
+      tiers.push({
+        rank_from: item.position,
+        rank_to: item.position,
+        amount: amt,
+      });
+    }
+  }
+  return tiers;
+}
+
 type Session = {
   id: string;
   name: string;
@@ -81,13 +147,79 @@ export default function SessionsPage() {
   const [endsAt, setEndsAt] = useState("");
   const [entryFee, setEntryFee] = useState("0");
   const [prizePool, setPrizePool] = useState("500000");
-  const [prizePreset, setPrizePreset] = useState<"36_winners" | "49_winners">("36_winners");
+  const [prizePreset, setPrizePreset] = useState<"36_winners" | "49_winners" | "custom">("36_winners");
+  const [numWinners, setNumWinners] = useState<number>(36);
+  const [positionPrizes, setPositionPrizes] = useState<PositionPrize[]>(() =>
+    expandTiersToPositions(PRESET_36_TIERS, 36)
+  );
+  const [rangeFrom, setRangeFrom] = useState<string>("4");
+  const [rangeTo, setRangeTo] = useState<string>("36");
+  const [rangeAmount, setRangeAmount] = useState<string>("10000");
   const [initialStatus, setInitialStatus] = useState<"active" | "upcoming">("active");
   const [selectedQuestionIds, setSelectedQuestionIds] = useState<string[]>([]);
   const [saving, setSaving] = useState(false);
   const [busySessionId, setBusySessionId] = useState<string | null>(null);
   const [error, setError] = useState("");
   const [toast, setToast] = useState("");
+
+  const syncPositionsAndPool = (nextPositions: PositionPrize[], presetLabel: "36_winners" | "49_winners" | "custom" = "custom") => {
+    setPositionPrizes(nextPositions);
+    setNumWinners(nextPositions.length);
+    setPrizePreset(presetLabel);
+    const total = nextPositions.reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
+    setPrizePool(String(total));
+  };
+
+  const handleNumWinnersChange = (nextCountRaw: number) => {
+    const nextCount = Math.max(1, Math.min(200, Math.floor(nextCountRaw || 1)));
+    setNumWinners(nextCount);
+    setPrizePreset("custom");
+    setPositionPrizes((prev) => {
+      const next: PositionPrize[] = [];
+      const fallbackAmt = prev.length > 0 ? prev[prev.length - 1].amount : 10000;
+      for (let p = 1; p <= nextCount; p++) {
+        const existing = prev.find((x) => x.position === p);
+        next.push({
+          position: p,
+          amount: existing ? existing.amount : fallbackAmt,
+        });
+      }
+      const total = next.reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
+      setPrizePool(String(total));
+      return next;
+    });
+    setRangeTo(String(nextCount));
+  };
+
+  const handlePositionPrizeChange = (pos: number, amountVal: number) => {
+    const safeAmt = Math.max(0, Number(amountVal) || 0);
+    setPrizePreset("custom");
+    setPositionPrizes((prev) => {
+      const next = prev.map((item) =>
+        item.position === pos ? { ...item, amount: safeAmt } : item
+      );
+      const total = next.reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
+      setPrizePool(String(total));
+      return next;
+    });
+  };
+
+  const handleApplyRangePrize = () => {
+    const fromP = Math.max(1, Math.floor(Number(rangeFrom) || 1));
+    const toP = Math.min(numWinners, Math.max(fromP, Math.floor(Number(rangeTo) || numWinners)));
+    const amt = Math.max(0, Number(rangeAmount) || 0);
+    setPrizePreset("custom");
+    setPositionPrizes((prev) => {
+      const next = prev.map((item) =>
+        item.position >= fromP && item.position <= toP
+          ? { ...item, amount: amt }
+          : item
+      );
+      const total = next.reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
+      setPrizePool(String(total));
+      return next;
+    });
+  };
 
   const showToastMsg = (msg: string) => {
     setToast(msg);
@@ -126,8 +258,10 @@ export default function SessionsPage() {
     setStartsAt(start.toISOString().slice(0, 16));
     setEndsAt(end.toISOString().slice(0, 16));
     setEntryFee("0");
-    setPrizePool("500000");
-    setPrizePreset("36_winners");
+    syncPositionsAndPool(expandTiersToPositions(PRESET_36_TIERS, 36), "36_winners");
+    setRangeFrom("4");
+    setRangeTo("36");
+    setRangeAmount("10000");
     setInitialStatus("active");
     setSelectedQuestionIds(publishedQuestions.slice(0, 10).map((q) => q.id));
     setError("");
@@ -140,12 +274,24 @@ export default function SessionsPage() {
     setStartsAt(s.starts_at ? new Date(s.starts_at).toISOString().slice(0, 16) : "");
     setEndsAt(s.ends_at ? new Date(s.ends_at).toISOString().slice(0, 16) : "");
     setEntryFee(String(s.entry_fee_coins ?? 0));
-    setPrizePool(String(s.prize_pool ?? 500000));
+    const rawTiers =
+      Array.isArray(s.prize_structure) && s.prize_structure.length > 0
+        ? s.prize_structure
+        : PRESET_36_TIERS;
     const maxRank = Math.max(
-      ...(s.prize_structure ?? []).map((t) => Number(t.rank_to ?? 0)),
-      36
+      ...rawTiers.map((t) => Number(t.rank_to ?? 0)),
+      1
     );
-    setPrizePreset(maxRank >= 49 ? "49_winners" : "36_winners");
+    const expanded = expandTiersToPositions(rawTiers, maxRank);
+    setPositionPrizes(expanded);
+    setNumWinners(expanded.length);
+    setPrizePool(String(s.prize_pool ?? expanded.reduce((sum, p) => sum + p.amount, 0)));
+    setPrizePreset(
+      maxRank === 49 ? "49_winners" : maxRank === 36 ? "36_winners" : "custom"
+    );
+    setRangeFrom(expanded.length >= 4 ? "4" : "1");
+    setRangeTo(String(expanded.length));
+    setRangeAmount(String(expanded[expanded.length - 1]?.amount ?? 10000));
     setInitialStatus(s.status === "upcoming" ? "upcoming" : "active");
     setSelectedQuestionIds(
       (s.assigned_questions ?? []).map((aq) => aq.question_id)
@@ -177,6 +323,13 @@ export default function SessionsPage() {
     }
 
     setSaving(true);
+    const customStructure = compressPositionsToTiers(positionPrizes);
+    const calculatedPool = positionPrizes.reduce(
+      (sum, p) => sum + (Number(p.amount) || 0),
+      0
+    );
+    const finalPrizePool = Number(prizePool) > 0 ? Number(prizePool) : calculatedPool;
+
     try {
       if (editingSessionId) {
         const res = await fetch("/api/admin/sessions", {
@@ -189,8 +342,9 @@ export default function SessionsPage() {
             startsAt,
             endsAt,
             entryFee: Number(entryFee),
-            prizePool: Number(prizePool),
+            prizePool: finalPrizePool,
             prizePreset,
+            prizeStructure: customStructure,
             status: initialStatus,
             selectedQuestionIds,
           }),
@@ -201,7 +355,9 @@ export default function SessionsPage() {
           setSaving(false);
           return;
         }
-        showToastMsg(`Session "${name}" updated with ${selectedQuestionIds.length} questions!`);
+        showToastMsg(
+          `Session "${name}" updated (${numWinners} winners, ₦${finalPrizePool.toLocaleString()} pool)!`
+        );
       } else {
         const res = await fetch("/api/admin/sessions", {
           method: "POST",
@@ -211,8 +367,9 @@ export default function SessionsPage() {
             startsAt,
             endsAt,
             entryFee: Number(entryFee),
-            prizePool: Number(prizePool),
+            prizePool: finalPrizePool,
             prizePreset,
+            prizeStructure: customStructure,
             status: initialStatus,
             selectedQuestionIds,
           }),
@@ -223,7 +380,9 @@ export default function SessionsPage() {
           setSaving(false);
           return;
         }
-        showToastMsg(`Session "${name}" created with ${selectedQuestionIds.length} questions!`);
+        showToastMsg(
+          `Session "${name}" created (${numWinners} winners, ₦${finalPrizePool.toLocaleString()} pool)!`
+        );
       }
 
       setShowModal(false);
@@ -619,12 +778,17 @@ export default function SessionsPage() {
             </div>
 
             <form onSubmit={handleSaveSession} className="space-y-5">
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
                 <div className="sm:col-span-2">
-                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1.5">
+                  <label
+                    htmlFor="session-name-input"
+                    className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1.5"
+                  >
                     Session Name *
                   </label>
                   <input
+                    id="session-name-input"
+                    name="sessionName"
                     value={name}
                     onChange={(e) => setName(e.target.value)}
                     required
@@ -633,25 +797,56 @@ export default function SessionsPage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1.5">
-                    Prize Pool (₦) *
+                  <label
+                    htmlFor="session-num-winners-input"
+                    className="block text-xs font-semibold uppercase tracking-wider text-emerald-300 mb-1.5"
+                  >
+                    Number of Winners *
                   </label>
                   <input
+                    id="session-num-winners-input"
+                    name="numWinners"
                     type="number"
+                    min={1}
+                    max={200}
+                    inputMode="numeric"
+                    value={numWinners}
+                    onChange={(e) => handleNumWinnersChange(Number(e.target.value))}
+                    required
+                    className="w-full rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-4 py-2.5 text-sm text-emerald-300 font-black font-mono"
+                  />
+                </div>
+                <div>
+                  <label
+                    htmlFor="session-prize-pool-input"
+                    className="block text-xs font-semibold uppercase tracking-wider text-amber-300 mb-1.5"
+                  >
+                    Total Prize Pool (₦) *
+                  </label>
+                  <input
+                    id="session-prize-pool-input"
+                    name="prizePool"
+                    type="number"
+                    inputMode="numeric"
                     value={prizePool}
                     onChange={(e) => setPrizePool(e.target.value)}
                     required
-                    className="w-full rounded-xl border border-white/10 bg-white/[0.04] px-4 py-2.5 text-sm text-amber-300 font-bold"
+                    className="w-full rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-2.5 text-sm text-amber-300 font-black font-mono"
                   />
                 </div>
               </div>
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <div>
-                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1.5">
+                  <label
+                    htmlFor="session-starts-at"
+                    className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1.5"
+                  >
                     Start Date &amp; Time *
                   </label>
                   <input
+                    id="session-starts-at"
+                    name="startsAt"
                     type="datetime-local"
                     value={startsAt}
                     onChange={(e) => setStartsAt(e.target.value)}
@@ -660,10 +855,15 @@ export default function SessionsPage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1.5">
+                  <label
+                    htmlFor="session-ends-at"
+                    className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1.5"
+                  >
                     End Date &amp; Time (72h Window) *
                   </label>
                   <input
+                    id="session-ends-at"
+                    name="endsAt"
                     type="datetime-local"
                     value={endsAt}
                     onChange={(e) => setEndsAt(e.target.value)}
@@ -672,10 +872,15 @@ export default function SessionsPage() {
                   />
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1.5">
+                  <label
+                    htmlFor="session-status-select"
+                    className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1.5"
+                  >
                     Session Status
                   </label>
                   <select
+                    id="session-status-select"
+                    name="initialStatus"
                     value={initialStatus}
                     onChange={(e) => setInitialStatus(e.target.value as "active" | "upcoming")}
                     className="w-full rounded-xl border border-white/10 bg-[#0e121b] px-3 py-2.5 text-xs font-bold text-white"
@@ -686,48 +891,175 @@ export default function SessionsPage() {
                 </div>
               </div>
 
-              {/* Prize Distribution Preset (Page 20: 36 Winners vs 49 Winners) */}
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setPrizePreset("36_winners");
-                    setPrizePool("500000");
-                  }}
-                  className={`p-3.5 rounded-2xl border text-left transition-all ${
-                    prizePreset === "36_winners"
-                      ? "bg-amber-500/15 border-amber-500 text-white"
-                      : "bg-white/[0.02] border-white/10 text-slate-300"
-                  }`}
-                >
-                  <p className="text-xs font-extrabold text-amber-400">
-                    Preset A: 36 Winners / ₦500,000 (Page 20 Left)
-                  </p>
-                  <p className="text-[11px] text-slate-300 mt-1">
-                    1st: ₦100k · 2nd: ₦50k · 3rd: ₦20k · 4th–36th: ₦10k each
-                  </p>
-                </button>
+              {/* Editable Number of Winners & Per-Position Prize Money Configurator */}
+              <fieldset className="rounded-2xl border border-amber-500/30 bg-[#0a0d14] p-4 space-y-4">
+                <legend className="px-2 text-xs font-extrabold uppercase tracking-wider text-amber-400">
+                  Winners &amp; Prize Money Per Position (1st – {formatOrdinal(numWinners)})
+                </legend>
 
-                <button
-                  type="button"
-                  onClick={() => {
-                    setPrizePreset("49_winners");
-                    setPrizePool("500000");
-                  }}
-                  className={`p-3.5 rounded-2xl border text-left transition-all ${
-                    prizePreset === "49_winners"
-                      ? "bg-emerald-500/15 border-emerald-500 text-white"
-                      : "bg-white/[0.02] border-white/10 text-slate-300"
-                  }`}
-                >
-                  <p className="text-xs font-extrabold text-emerald-400">
-                    Preset B: 49 Winners / ₦500,000 (Page 20 Right)
-                  </p>
-                  <p className="text-[11px] text-slate-300 mt-1">
-                    1st: ₦100k · 2nd: ₦50k · 3rd: ₦20k · 4th–23rd: ₦10k · 24th–49th: ₦5k
-                  </p>
-                </button>
-              </div>
+                {/* Quick Presets */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <button
+                    type="button"
+                    onClick={() =>
+                      syncPositionsAndPool(
+                        expandTiersToPositions(PRESET_36_TIERS, 36),
+                        "36_winners"
+                      )
+                    }
+                    className={`p-3 rounded-xl border text-left transition-all ${
+                      prizePreset === "36_winners"
+                        ? "bg-amber-500/15 border-amber-500 text-white"
+                        : "bg-white/[0.02] border-white/10 text-slate-300"
+                    }`}
+                  >
+                    <p className="text-xs font-extrabold text-amber-400">
+                      Preset A: 36 Winners / ₦500,000
+                    </p>
+                    <p className="text-[11px] text-slate-300 mt-0.5">
+                      1st: ₦100k · 2nd: ₦50k · 3rd: ₦20k · 4th–36th: ₦10k each
+                    </p>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      syncPositionsAndPool(
+                        expandTiersToPositions(PRESET_49_TIERS, 49),
+                        "49_winners"
+                      )
+                    }
+                    className={`p-3 rounded-xl border text-left transition-all ${
+                      prizePreset === "49_winners"
+                        ? "bg-emerald-500/15 border-emerald-500 text-white"
+                        : "bg-white/[0.02] border-white/10 text-slate-300"
+                    }`}
+                  >
+                    <p className="text-xs font-extrabold text-emerald-400">
+                      Preset B: 49 Winners / ₦500,000
+                    </p>
+                    <p className="text-[11px] text-slate-300 mt-0.5">
+                      1st: ₦100k · 2nd: ₦50k · 3rd: ₦20k · 4th–23rd: ₦10k · 24th–49th: ₦5k
+                    </p>
+                  </button>
+                </div>
+
+                {/* Quick Range Setter */}
+                <div className="flex flex-wrap items-end gap-2.5 p-3 rounded-xl bg-white/[0.03] border border-white/10">
+                  <div>
+                    <label
+                      htmlFor="session-range-from"
+                      className="block text-[10px] font-bold uppercase text-slate-400 mb-1"
+                    >
+                      From Position
+                    </label>
+                    <input
+                      id="session-range-from"
+                      type="number"
+                      min={1}
+                      max={numWinners}
+                      inputMode="numeric"
+                      value={rangeFrom}
+                      onChange={(e) => setRangeFrom(e.target.value)}
+                      className="w-20 rounded-lg border border-white/15 bg-[#0e121b] px-2.5 py-1.5 text-xs font-mono text-white"
+                    />
+                  </div>
+                  <div>
+                    <label
+                      htmlFor="session-range-to"
+                      className="block text-[10px] font-bold uppercase text-slate-400 mb-1"
+                    >
+                      To Position
+                    </label>
+                    <input
+                      id="session-range-to"
+                      type="number"
+                      min={1}
+                      max={numWinners}
+                      inputMode="numeric"
+                      value={rangeTo}
+                      onChange={(e) => setRangeTo(e.target.value)}
+                      className="w-20 rounded-lg border border-white/15 bg-[#0e121b] px-2.5 py-1.5 text-xs font-mono text-white"
+                    />
+                  </div>
+                  <div>
+                    <label
+                      htmlFor="session-range-amount"
+                      className="block text-[10px] font-bold uppercase text-slate-400 mb-1"
+                    >
+                      Prize Per Position (₦)
+                    </label>
+                    <input
+                      id="session-range-amount"
+                      type="number"
+                      min={0}
+                      inputMode="numeric"
+                      value={rangeAmount}
+                      onChange={(e) => setRangeAmount(e.target.value)}
+                      className="w-28 rounded-lg border border-white/15 bg-[#0e121b] px-2.5 py-1.5 text-xs font-mono font-bold text-amber-300"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleApplyRangePrize}
+                    className="px-3.5 py-1.5 rounded-lg bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-300 text-xs font-bold"
+                  >
+                    Apply to Positions {rangeFrom}–{rangeTo}
+                  </button>
+                </div>
+
+                {/* Individual Position Prize Money Grid (Editable for Every Single Position 1..N) */}
+                <div className="space-y-1.5">
+                  <div className="flex items-center justify-between text-[11px] text-slate-400">
+                    <span>
+                      Edit prize money (₦) for each individual position ({numWinners} winners):
+                    </span>
+                    <span className="font-mono font-bold text-amber-300">
+                      Sum of Positions: ₦
+                      {positionPrizes
+                        .reduce((s, p) => s + (Number(p.amount) || 0), 0)
+                        .toLocaleString()}
+                    </span>
+                  </div>
+                  <div className="max-h-56 overflow-y-auto pr-1 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 gap-2">
+                    {positionPrizes.map((item) => (
+                      <div
+                        key={item.position}
+                        className="rounded-xl p-2 bg-white/[0.03] border border-white/10 flex flex-col gap-1"
+                      >
+                        <label
+                          htmlFor={`session-pos-prize-${item.position}`}
+                          className="text-[11px] font-extrabold text-slate-300 flex items-center justify-between"
+                        >
+                          <span>{formatOrdinal(item.position)} Position</span>
+                          {item.position <= 3 && (
+                            <span className="text-[10px] text-amber-400">Podium</span>
+                          )}
+                        </label>
+                        <div className="relative flex items-center">
+                          <span className="absolute left-2.5 text-xs font-bold text-slate-400">
+                            ₦
+                          </span>
+                          <input
+                            id={`session-pos-prize-${item.position}`}
+                            type="number"
+                            min={0}
+                            inputMode="numeric"
+                            value={item.amount}
+                            onChange={(e) =>
+                              handlePositionPrizeChange(
+                                item.position,
+                                Number(e.target.value)
+                              )
+                            }
+                            className="w-full rounded-lg border border-white/10 bg-[#0b0e14] pl-6 pr-2 py-1 text-xs font-mono font-bold text-amber-300 focus:border-amber-500 focus:outline-none"
+                          />
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </fieldset>
 
               {/* Standard 10 Questions Picker */}
               <div className="space-y-2">

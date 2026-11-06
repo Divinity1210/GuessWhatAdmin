@@ -8,6 +8,50 @@ type PrizeTier = {
   amount: number;
 };
 
+type PositionPrize = {
+  position: number;
+  amount: number;
+};
+
+function expandTiersToPositions(tiers: PrizeTier[], count?: number): PositionPrize[] {
+  const safeTiers = Array.isArray(tiers) && tiers.length > 0 ? tiers : PRESET_36_TIERS;
+  const maxRank =
+    count !== undefined && count > 0
+      ? count
+      : Math.max(...safeTiers.map((t) => Number(t.rank_to ?? 0)), 36);
+  const result: PositionPrize[] = [];
+  for (let p = 1; p <= maxRank; p++) {
+    const matched = safeTiers.find(
+      (t) => p >= Number(t.rank_from) && p <= Number(t.rank_to)
+    );
+    const fallbackAmt = safeTiers[safeTiers.length - 1]?.amount ?? 10000;
+    result.push({
+      position: p,
+      amount: matched ? Number(matched.amount) : Number(fallbackAmt),
+    });
+  }
+  return result;
+}
+
+function compressPositionsToTiers(positions: PositionPrize[]): PrizeTier[] {
+  const tiers: PrizeTier[] = [];
+  const sorted = [...positions].sort((a, b) => a.position - b.position);
+  for (const item of sorted) {
+    const amt = Math.max(0, Number(item.amount) || 0);
+    const last = tiers[tiers.length - 1];
+    if (last && last.amount === amt && last.rank_to === item.position - 1) {
+      last.rank_to = item.position;
+    } else {
+      tiers.push({
+        rank_from: item.position,
+        rank_to: item.position,
+        amount: amt,
+      });
+    }
+  }
+  return tiers;
+}
+
 type WinnerRow = {
   entryId: string;
   userId: string;
@@ -95,9 +139,21 @@ export default function AdminWinnersPage() {
   const [toast, setToast] = useState<string>("");
 
   // Prize Distribution Configurator state
-  const [showPrizeConfigurator, setShowPrizeConfigurator] = useState<boolean>(false);
+  const [showPrizeConfigurator, setShowPrizeConfigurator] = useState<boolean>(true);
   const [tiers, setTiers] = useState<PrizeTier[]>(PRESET_36_TIERS);
+  const [numWinnersInput, setNumWinnersInput] = useState<number>(36);
+  const [positionPrizes, setPositionPrizes] = useState<PositionPrize[]>(() =>
+    expandTiersToPositions(PRESET_36_TIERS, 36)
+  );
+  const [rangeFrom, setRangeFrom] = useState<string>("4");
+  const [rangeTo, setRangeTo] = useState<string>("36");
+  const [rangeAmount, setRangeAmount] = useState<string>("10000");
   const [savingStructure, setSavingStructure] = useState<boolean>(false);
+
+  // Inline table position prize editor state
+  const [editingPositionNum, setEditingPositionNum] = useState<number | null>(null);
+  const [editingPositionAmount, setEditingPositionAmount] = useState<string>("");
+  const [savingPositionPrize, setSavingPositionPrize] = useState<boolean>(false);
 
   // Bank Account Editor modal state
   const [editingBankWinner, setEditingBankWinner] = useState<WinnerRow | null>(null);
@@ -134,7 +190,12 @@ export default function AdminWinnersPage() {
           setSelectedSessionId(data.activeSession.id);
         }
         if (data.activeSession?.prizeStructure) {
-          setTiers(data.activeSession.prizeStructure);
+          const loadedTiers = data.activeSession.prizeStructure as PrizeTier[];
+          setTiers(loadedTiers);
+          const expanded = expandTiersToPositions(loadedTiers);
+          setPositionPrizes(expanded);
+          setNumWinnersInput(expanded.length);
+          setRangeTo(String(expanded.length));
         }
         setSummary(data.summary ?? null);
         setWinners(data.winners ?? []);
@@ -196,10 +257,85 @@ export default function AdminWinnersPage() {
     await fetchWinners();
   };
 
+  const handleNumWinnersChange = (nextCountRaw: number) => {
+    const nextCount = Math.max(1, Math.min(200, Math.floor(nextCountRaw || 1)));
+    setNumWinnersInput(nextCount);
+    setPositionPrizes((prev) => {
+      const next: PositionPrize[] = [];
+      const fallbackAmt = prev.length > 0 ? prev[prev.length - 1].amount : 10000;
+      for (let p = 1; p <= nextCount; p++) {
+        const existing = prev.find((x) => x.position === p);
+        next.push({
+          position: p,
+          amount: existing ? existing.amount : fallbackAmt,
+        });
+      }
+      setTiers(compressPositionsToTiers(next));
+      return next;
+    });
+    setRangeTo(String(nextCount));
+  };
+
+  const handlePositionPrizeInput = (pos: number, amtVal: number) => {
+    const safeAmt = Math.max(0, Number(amtVal) || 0);
+    setPositionPrizes((prev) => {
+      const next = prev.map((item) =>
+        item.position === pos ? { ...item, amount: safeAmt } : item
+      );
+      setTiers(compressPositionsToTiers(next));
+      return next;
+    });
+  };
+
+  const handleApplyRangePrize = () => {
+    const fromP = Math.max(1, Math.floor(Number(rangeFrom) || 1));
+    const toP = Math.min(
+      numWinnersInput,
+      Math.max(fromP, Math.floor(Number(rangeTo) || numWinnersInput))
+    );
+    const amt = Math.max(0, Number(rangeAmount) || 0);
+    setPositionPrizes((prev) => {
+      const next = prev.map((item) =>
+        item.position >= fromP && item.position <= toP
+          ? { ...item, amount: amt }
+          : item
+      );
+      setTiers(compressPositionsToTiers(next));
+      return next;
+    });
+  };
+
+  const handleSaveSinglePositionPrize = async (position: number, amount: number) => {
+    const sid = selectedSessionId || activeSession?.id;
+    if (!sid) return;
+    setSavingPositionPrize(true);
+    try {
+      const res = await fetch("/api/admin/winners", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          sessionId: sid,
+          action: "update_position_prize",
+          position,
+          amount: Math.max(0, Number(amount) || 0),
+        }),
+      });
+      if (res.ok) {
+        setEditingPositionNum(null);
+        showToastMsg(
+          `Updated ${formatOrdinal(position)} position prize to ₦${Number(amount).toLocaleString()}!`
+        );
+        await fetchWinners();
+      }
+    } finally {
+      setSavingPositionPrize(false);
+    }
+  };
+
   const handleSavePrizeDistribution = async (customTiers?: PrizeTier[]) => {
     const sid = selectedSessionId || activeSession?.id;
     if (!sid) return;
-    const targetTiers = customTiers ?? tiers;
+    const targetTiers = customTiers ?? compressPositionsToTiers(positionPrizes);
     const totalPool = targetTiers.reduce(
       (sum, t) =>
         sum + (Number(t.rank_to) - Number(t.rank_from) + 1) * Number(t.amount ?? 0),
@@ -220,8 +356,11 @@ export default function AdminWinnersPage() {
       });
       if (res.ok) {
         setTiers(targetTiers);
+        const expanded = expandTiersToPositions(targetTiers);
+        setPositionPrizes(expanded);
+        setNumWinnersInput(expanded.length);
         showToastMsg(
-          `Saved prize distribution (₦${totalPool.toLocaleString()} total pool) & recalculated winner allocations!`
+          `Saved ${expanded.length} winners & per-position prizes (₦${totalPool.toLocaleString()} total pool)!`
         );
         await fetchWinners();
       }
@@ -373,29 +512,32 @@ export default function AdminWinnersPage() {
         </div>
       </div>
 
-      {/* Configure Prize Distribution Panel (Page 20 Left: 36 Winners / Right: 49 Winners + Custom Tier Editor) */}
+      {/* Configure Number of Winners & Per-Position Prize Money Panel */}
       {showPrizeConfigurator && (
-        <div className="rounded-3xl p-6 md:p-8 bg-[#0f1219] border border-amber-500/40 space-y-6 shadow-2xl">
+        <div
+          id="prize-configurator-panel"
+          className="rounded-3xl p-6 md:p-8 bg-[#0f1219] border border-amber-500/40 space-y-6 shadow-2xl"
+        >
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/10 pb-4">
             <div>
               <span className="text-xs font-bold uppercase tracking-wider text-amber-400">
-                Page 20 · Session Prize Distribution Structure
+                Page 20 · Editable Winners Count &amp; Per-Position Prize Money
               </span>
               <h2 className="text-xl font-extrabold text-white mt-0.5">
-                Configure Prize Pool Breakdown for {activeSession?.name}
+                Edit Number of Winners &amp; Prize Money per Position — {activeSession?.name}
               </h2>
               <p className="text-xs text-slate-400">
-                Apply either official Page 20 ₦500,000 distribution preset or customize rank tiers below.
+                Set the exact number of winners and edit the prize money (₦) for each individual position (1st through {formatOrdinal(numWinnersInput)}).
               </p>
             </div>
-            <div className="flex items-center gap-2">
+            <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
                 disabled={savingStructure}
                 onClick={() => handleSavePrizeDistribution(PRESET_36_TIERS)}
                 className="px-3.5 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-extrabold"
               >
-                Apply 36 Winners (₦500k)
+                Preset: 36 Winners (₦500k)
               </button>
               <button
                 type="button"
@@ -403,140 +545,183 @@ export default function AdminWinnersPage() {
                 onClick={() => handleSavePrizeDistribution(PRESET_49_TIERS)}
                 className="px-3.5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 text-xs font-extrabold"
               >
-                Apply 49 Winners (₦500k)
+                Preset: 49 Winners (₦500k)
               </button>
             </div>
           </div>
 
-          {/* Side-by-Side Comparison of Page 20 Presets */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-            <div className="rounded-2xl p-4 bg-white/[0.02] border border-amber-500/25 space-y-2">
-              <div className="flex items-center justify-between">
-                <h3 className="text-sm font-extrabold text-amber-300">
-                  Preset A (Page 20 Left): 36 Winners — ₦500,000
-                </h3>
-                <span className="text-xs font-mono text-slate-400">36 Slots</span>
-              </div>
-              <ul className="text-xs text-slate-300 space-y-1 font-mono">
-                <li>• 1st Position: ₦100,000</li>
-                <li>• 2nd Position: ₦50,000</li>
-                <li>• 3rd Position: ₦20,000</li>
-                <li>• 4th – 36th Position (33 winners): ₦10,000 each (₦330,000)</li>
-              </ul>
-            </div>
-
-            <div className="rounded-2xl p-4 bg-white/[0.02] border border-emerald-500/25 space-y-2">
-              <div className="flex items-center justify-between">
-                <h3 className="text-sm font-extrabold text-emerald-300">
-                  Preset B (Page 20 Right): 49 Winners — ₦500,000
-                </h3>
-                <span className="text-xs font-mono text-slate-400">49 Slots</span>
-              </div>
-              <ul className="text-xs text-slate-300 space-y-1 font-mono">
-                <li>• 1st Position: ₦100,000</li>
-                <li>• 2nd Position: ₦50,000</li>
-                <li>• 3rd Position: ₦20,000</li>
-                <li>• 4th – 23rd Position (20 winners): ₦10,000 each (₦200,000)</li>
-                <li>• 24th – 49th Position (26 winners): ₦5,000 each (₦130,000)</li>
-              </ul>
-            </div>
-          </div>
-
-          {/* Custom Tier Editor */}
-          <div className="space-y-3">
-            <div className="flex items-center justify-between">
-              <h3 className="text-xs font-bold uppercase tracking-wider text-slate-300">
-                Active Rank Tiers for Session
-              </h3>
-              <button
-                type="button"
-                onClick={() =>
-                  setTiers([
-                    ...tiers,
-                    {
-                      rank_from: (tiers[tiers.length - 1]?.rank_to ?? 0) + 1,
-                      rank_to: (tiers[tiers.length - 1]?.rank_to ?? 0) + 10,
-                      amount: 5000,
-                    },
-                  ])
-                }
-                className="text-xs font-bold text-amber-400 hover:underline"
-              >
-                + Add Prize Tier
-              </button>
-            </div>
-
-            <div className="space-y-2">
-              {tiers.map((tier, idx) => (
-                <div
-                  key={idx}
-                  className="grid grid-cols-12 items-center gap-3 p-3 rounded-xl bg-white/[0.03] border border-white/10 text-xs"
+          {/* Step 1: Edit Number of Winners & Quick Range Setter */}
+          <fieldset className="rounded-2xl p-4 bg-white/[0.02] border border-white/10 space-y-4">
+            <legend className="px-2 text-xs font-extrabold uppercase tracking-wider text-emerald-300">
+              1. Number of Winners &amp; Bulk Range Helper
+            </legend>
+            <div className="grid grid-cols-1 md:grid-cols-12 gap-4 items-end">
+              <div className="md:col-span-3">
+                <label
+                  htmlFor="winners-total-count"
+                  className="block text-xs font-bold uppercase tracking-wider text-emerald-300 mb-1.5"
                 >
-                  <div className="col-span-3 flex items-center gap-2">
-                    <span className="text-slate-400">Rank From:</span>
+                  Total Number of Winners *
+                </label>
+                <input
+                  id="winners-total-count"
+                  name="numWinners"
+                  type="number"
+                  min={1}
+                  max={200}
+                  inputMode="numeric"
+                  value={numWinnersInput}
+                  onChange={(e) => handleNumWinnersChange(Number(e.target.value))}
+                  className="w-full rounded-xl border border-emerald-500/40 bg-emerald-500/10 px-3.5 py-2 text-sm font-black font-mono text-emerald-300"
+                />
+              </div>
+
+              <div className="md:col-span-2">
+                <label
+                  htmlFor="winners-range-from"
+                  className="block text-[11px] font-semibold text-slate-400 mb-1.5"
+                >
+                  From Position
+                </label>
+                <input
+                  id="winners-range-from"
+                  type="number"
+                  min={1}
+                  max={numWinnersInput}
+                  inputMode="numeric"
+                  value={rangeFrom}
+                  onChange={(e) => setRangeFrom(e.target.value)}
+                  className="w-full rounded-xl border border-white/10 bg-[#0a0d14] px-3 py-2 text-xs font-mono text-white"
+                />
+              </div>
+
+              <div className="md:col-span-2">
+                <label
+                  htmlFor="winners-range-to"
+                  className="block text-[11px] font-semibold text-slate-400 mb-1.5"
+                >
+                  To Position
+                </label>
+                <input
+                  id="winners-range-to"
+                  type="number"
+                  min={1}
+                  max={numWinnersInput}
+                  inputMode="numeric"
+                  value={rangeTo}
+                  onChange={(e) => setRangeTo(e.target.value)}
+                  className="w-full rounded-xl border border-white/10 bg-[#0a0d14] px-3 py-2 text-xs font-mono text-white"
+                />
+              </div>
+
+              <div className="md:col-span-3">
+                <label
+                  htmlFor="winners-range-amount"
+                  className="block text-[11px] font-semibold text-slate-400 mb-1.5"
+                >
+                  Prize Money (₦)
+                </label>
+                <input
+                  id="winners-range-amount"
+                  type="number"
+                  min={0}
+                  inputMode="numeric"
+                  value={rangeAmount}
+                  onChange={(e) => setRangeAmount(e.target.value)}
+                  className="w-full rounded-xl border border-white/10 bg-[#0a0d14] px-3 py-2 text-xs font-mono font-bold text-amber-300"
+                />
+              </div>
+
+              <div className="md:col-span-2">
+                <button
+                  type="button"
+                  onClick={handleApplyRangePrize}
+                  className="w-full px-3 py-2 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-300 text-xs font-extrabold"
+                >
+                  Apply to {rangeFrom}–{rangeTo}
+                </button>
+              </div>
+            </div>
+          </fieldset>
+
+          {/* Step 2: Individual Position Prize Money Editor (1st .. Nth Position) */}
+          <fieldset className="rounded-2xl p-4 bg-white/[0.02] border border-amber-500/30 space-y-3">
+            <legend className="px-2 text-xs font-extrabold uppercase tracking-wider text-amber-300">
+              2. Edit Prize Money for Each Individual Position (1st – {formatOrdinal(numWinnersInput)})
+            </legend>
+            <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-400">
+              <span>
+                Every position below is individually editable. Total Winners:{" "}
+                <strong className="text-white">{numWinnersInput}</strong>
+              </span>
+              <span className="font-mono font-extrabold text-amber-400">
+                Total Prize Pool: ₦
+                {positionPrizes
+                  .reduce((sum, p) => sum + (Number(p.amount) || 0), 0)
+                  .toLocaleString()}
+              </span>
+            </div>
+
+            <div className="max-h-72 overflow-y-auto pr-1 grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-6 gap-2.5">
+              {positionPrizes.map((item) => (
+                <div
+                  key={item.position}
+                  className={`rounded-xl p-2.5 border flex flex-col gap-1.5 ${
+                    item.position === 1
+                      ? "bg-amber-500/10 border-amber-500/40"
+                      : item.position === 2
+                      ? "bg-slate-300/10 border-slate-300/30"
+                      : item.position === 3
+                      ? "bg-amber-700/15 border-amber-600/30"
+                      : "bg-[#0a0d14] border-white/10"
+                  }`}
+                >
+                  <label
+                    htmlFor={`winner-pos-prize-${item.position}`}
+                    className="text-[11px] font-extrabold text-slate-200 flex items-center justify-between"
+                  >
+                    <span>{formatOrdinal(item.position)} Position</span>
+                  </label>
+                  <div className="relative flex items-center">
+                    <span className="absolute left-2.5 text-xs font-bold text-slate-400">
+                      ₦
+                    </span>
                     <input
+                      id={`winner-pos-prize-${item.position}`}
                       type="number"
-                      value={tier.rank_from}
-                      onChange={(e) => {
-                        const next = [...tiers];
-                        next[idx] = { ...next[idx], rank_from: Number(e.target.value) };
-                        setTiers(next);
-                      }}
-                      className="w-16 rounded-lg bg-[#0a0d14] border border-white/10 px-2 py-1 text-white font-mono"
+                      min={0}
+                      inputMode="numeric"
+                      value={item.amount}
+                      onChange={(e) =>
+                        handlePositionPrizeInput(
+                          item.position,
+                          Number(e.target.value)
+                        )
+                      }
+                      className="w-full rounded-lg border border-white/15 bg-black/40 pl-6 pr-2 py-1.5 text-xs font-mono font-bold text-amber-300 focus:border-amber-500 focus:outline-none"
                     />
-                  </div>
-                  <div className="col-span-3 flex items-center gap-2">
-                    <span className="text-slate-400">Rank To:</span>
-                    <input
-                      type="number"
-                      value={tier.rank_to}
-                      onChange={(e) => {
-                        const next = [...tiers];
-                        next[idx] = { ...next[idx], rank_to: Number(e.target.value) };
-                        setTiers(next);
-                      }}
-                      className="w-16 rounded-lg bg-[#0a0d14] border border-white/10 px-2 py-1 text-white font-mono"
-                    />
-                  </div>
-                  <div className="col-span-4 flex items-center gap-2">
-                    <span className="text-slate-400">Prize Each (₦):</span>
-                    <input
-                      type="number"
-                      value={tier.amount}
-                      onChange={(e) => {
-                        const next = [...tiers];
-                        next[idx] = { ...next[idx], amount: Number(e.target.value) };
-                        setTiers(next);
-                      }}
-                      className="w-28 rounded-lg bg-[#0a0d14] border border-white/10 px-2 py-1 text-amber-300 font-bold font-mono"
-                    />
-                  </div>
-                  <div className="col-span-2 text-right">
-                    <button
-                      type="button"
-                      onClick={() => setTiers(tiers.filter((_, i) => i !== idx))}
-                      className="text-rose-400 hover:text-rose-300 font-bold"
-                    >
-                      Remove
-                    </button>
                   </div>
                 </div>
               ))}
             </div>
 
-            <div className="flex justify-end gap-3 pt-2">
+            <div className="flex justify-end gap-3 pt-2 border-t border-white/10">
               <button
                 type="button"
                 disabled={savingStructure}
-                onClick={() => handleSavePrizeDistribution(tiers)}
-                className="px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-extrabold"
+                onClick={() =>
+                  handleSavePrizeDistribution(compressPositionsToTiers(positionPrizes))
+                }
+                className="px-6 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-extrabold shadow-lg shadow-amber-500/20"
               >
                 {savingStructure
                   ? "Saving..."
-                  : "Save Custom Prize Structure & Recalculate"}
+                  : `Save ${numWinnersInput} Winners & Position Prizes (₦${positionPrizes
+                      .reduce((s, p) => s + (Number(p.amount) || 0), 0)
+                      .toLocaleString()})`}
               </button>
             </div>
-          </div>
+          </fieldset>
         </div>
       )}
 
@@ -686,7 +871,57 @@ export default function AdminWinnersPage() {
                       {formatTimeShort(w.totalTimeMs)}
                     </td>
                     <td className="px-4 py-3.5 font-mono text-sm font-black text-emerald-400">
-                      ₦{w.prizeAllocated.toLocaleString()}
+                      {editingPositionNum === w.position ? (
+                        <div className="flex items-center gap-1.5">
+                          <label htmlFor={`inline-prize-pos-${w.position}`} className="sr-only">
+                            Prize for {formatOrdinal(w.position)} position
+                          </label>
+                          <input
+                            id={`inline-prize-pos-${w.position}`}
+                            type="number"
+                            min={0}
+                            inputMode="numeric"
+                            value={editingPositionAmount}
+                            onChange={(e) => setEditingPositionAmount(e.target.value)}
+                            className="w-28 rounded-lg border border-amber-500 bg-[#0a0d14] px-2 py-1 text-xs font-mono font-bold text-amber-300"
+                          />
+                          <button
+                            type="button"
+                            disabled={savingPositionPrize}
+                            onClick={() =>
+                              handleSaveSinglePositionPrize(
+                                w.position,
+                                Number(editingPositionAmount)
+                              )
+                            }
+                            className="px-2 py-1 rounded bg-emerald-500 text-slate-950 text-[10px] font-extrabold"
+                          >
+                            {savingPositionPrize ? "..." : "Save"}
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => setEditingPositionNum(null)}
+                            className="px-1.5 py-1 rounded bg-white/10 text-slate-300 text-[10px] font-bold"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-2">
+                          <span>₦{w.prizeAllocated.toLocaleString()}</span>
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditingPositionNum(w.position);
+                              setEditingPositionAmount(String(w.prizeAllocated));
+                            }}
+                            title={`Edit prize money for ${formatOrdinal(w.position)} position`}
+                            className="px-2 py-0.5 rounded bg-white/5 hover:bg-white/10 text-[10px] font-sans font-semibold text-amber-300 border border-amber-500/30"
+                          >
+                            ✎ Edit
+                          </button>
+                        </div>
+                      )}
                     </td>
                     <td className="px-4 py-3.5 text-xs">
                       <div className="flex items-center justify-between gap-2 max-w-xs">

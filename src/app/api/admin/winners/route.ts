@@ -520,24 +520,71 @@ export async function PATCH(req: NextRequest) {
       return NextResponse.json({ ok: true });
     }
 
-    // 4. Configure Prize Distribution for Session (Page 20 Left 36 Winners / Right 49 Winners / Custom Tiers)
-    if (action === "configure_prize_distribution") {
-      const nextStructure: PrizeTier[] =
-        Array.isArray(prizeStructure) && prizeStructure.length > 0
-          ? prizeStructure
-          : prizePreset === "49_winners"
-          ? PRESET_49_WINNERS
-          : PRESET_36_WINNERS;
+    // 4. Configure Prize Distribution for Session (Page 20 Left 36 Winners / Right 49 Winners / Custom Position Prizes)
+    if (action === "configure_prize_distribution" || action === "update_position_prize") {
+      let nextStructure: PrizeTier[] = [];
+
+      if (action === "update_position_prize") {
+        const targetPosition = Math.max(1, Math.floor(Number(body.position ?? 1)));
+        const newAmount = Math.max(0, Number(body.amount ?? 0));
+
+        const { data: currentSession } = await supabase
+          .from("game_sessions")
+          .select("prize_structure")
+          .eq("id", sessionId)
+          .maybeSingle();
+
+        const rawCurrent =
+          Array.isArray(currentSession?.prize_structure) &&
+          currentSession.prize_structure.length > 0
+            ? (currentSession.prize_structure as PrizeTier[])
+            : PRESET_36_WINNERS;
+
+        const maxRank = Math.max(
+          targetPosition,
+          ...rawCurrent.map((t) => Number(t.rank_to ?? 0)),
+          36
+        );
+
+        const posAmounts: number[] = [];
+        for (let p = 1; p <= maxRank; p++) {
+          if (p === targetPosition) {
+            posAmounts.push(newAmount);
+          } else {
+            posAmounts.push(getPrizeForRank(p, rawCurrent));
+          }
+        }
+
+        // Compress contiguous positions with identical amounts into clean PrizeTier[]
+        for (let p = 1; p <= maxRank; p++) {
+          const amt = posAmounts[p - 1];
+          const last = nextStructure[nextStructure.length - 1];
+          if (last && last.amount === amt && last.rank_to === p - 1) {
+            last.rank_to = p;
+          } else {
+            nextStructure.push({ rank_from: p, rank_to: p, amount: amt });
+          }
+        }
+      } else {
+        nextStructure =
+          Array.isArray(prizeStructure) && prizeStructure.length > 0
+            ? prizeStructure
+            : prizePreset === "49_winners"
+            ? PRESET_49_WINNERS
+            : PRESET_36_WINNERS;
+      }
+
+      const calculatedPool = nextStructure.reduce(
+        (sum, t) =>
+          sum +
+          Math.max(0, Number(t.rank_to) - Number(t.rank_from) + 1) * Number(t.amount ?? 0),
+        0
+      );
 
       const totalPool =
-        prizePool !== undefined
+        prizePool !== undefined && action !== "update_position_prize"
           ? Number(prizePool)
-          : nextStructure.reduce(
-              (sum, t) =>
-                sum +
-                (Number(t.rank_to) - Number(t.rank_from) + 1) * Number(t.amount ?? 0),
-              0
-            );
+          : calculatedPool;
 
       const { error: uErr } = await supabase
         .from("game_sessions")
@@ -551,11 +598,17 @@ export async function PATCH(req: NextRequest) {
         return NextResponse.json({ error: uErr.message }, { status: 500 });
       }
 
-      // Also update prize_awarded on existing ranked entries for this session
-      const { data: entries } = await supabase
-        .from("session_entries")
-        .select("id, total_score, total_response_ms, final_rank")
-        .eq("session_id", sessionId);
+      // Update prize_awarded on existing ranked entries AND leaderboards table for this session
+      const [{ data: entries }, { data: lbRows }] = await Promise.all([
+        supabase
+          .from("session_entries")
+          .select("id, total_score, total_response_ms, final_rank")
+          .eq("session_id", sessionId),
+        supabase
+          .from("leaderboards")
+          .select("user_id, rank")
+          .eq("session_id", sessionId),
+      ]);
 
       const sorted = [...(entries ?? [])].sort((a, b) => {
         const diff = Number(b.total_score ?? 0) - Number(a.total_score ?? 0);
@@ -563,14 +616,24 @@ export async function PATCH(req: NextRequest) {
         return Number(a.total_response_ms ?? Infinity) - Number(b.total_response_ms ?? Infinity);
       });
 
-      for (let i = 0; i < sorted.length; i++) {
-        const rank = i + 1;
-        const prize = getPrizeForRank(rank, nextStructure);
-        await supabase
-          .from("session_entries")
-          .update({ final_rank: rank, prize_awarded: prize })
-          .eq("id", sorted[i].id);
-      }
+      await Promise.all([
+        ...sorted.map((entry, i) => {
+          const rank = i + 1;
+          const prize = getPrizeForRank(rank, nextStructure);
+          return supabase
+            .from("session_entries")
+            .update({ final_rank: rank, prize_awarded: prize })
+            .eq("id", entry.id);
+        }),
+        ...(lbRows ?? []).map((lb) => {
+          const prize = getPrizeForRank(Number(lb.rank), nextStructure);
+          return supabase
+            .from("leaderboards")
+            .update({ prize })
+            .eq("session_id", sessionId)
+            .eq("user_id", lb.user_id);
+        }),
+      ]);
 
       return NextResponse.json({
         ok: true,
