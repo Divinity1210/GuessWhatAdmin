@@ -160,12 +160,17 @@ export async function POST(req: NextRequest) {
     const supabase = createServiceClient();
     const body = await req.json();
 
+    if (body.action === "delete" && body.id) {
+      return performDeleteQuestion(supabase, body.id);
+    }
+
     const {
       title,
       category = "General",
       type = "text",
       status = "published",
       tags = [],
+      notes = null,
       options = [],
       assignToSessionId,
     } = body;
@@ -177,14 +182,26 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    const hasImageOptions = options.some(
+      (opt: unknown) =>
+        typeof opt === "object" &&
+        opt !== null &&
+        "media_url" in opt &&
+        typeof (opt as { media_url?: unknown }).media_url === "string" &&
+        ((opt as { media_url: string }).media_url.startsWith("http") ||
+          (opt as { media_url: string }).media_url.startsWith("data:image/"))
+    );
+    const resolvedType = type === "text" && hasImageOptions ? "image" : type;
+
     const { data: q, error: qError } = await supabase
       .from("questions")
       .insert({
         title: title.trim(),
         category: category || "General",
-        type,
+        type: resolvedType,
         status,
         tags,
+        notes: notes || null,
       })
       .select()
       .single();
@@ -248,17 +265,34 @@ async function handleUpdateQuestion(req: NextRequest) {
   try {
     const supabase = createServiceClient();
     const body = await req.json();
-    const { id, status, title, category, type, options } = body;
+    const { id, status, title, category, type, notes, options } = body;
 
     if (!id) {
       return NextResponse.json({ error: "Question ID is required" }, { status: 400 });
     }
 
+    const hasImageOptions =
+      Array.isArray(options) &&
+      options.some(
+        (opt: unknown) =>
+          typeof opt === "object" &&
+          opt !== null &&
+          "media_url" in opt &&
+          typeof (opt as { media_url?: unknown }).media_url === "string" &&
+          ((opt as { media_url: string }).media_url.startsWith("http") ||
+            (opt as { media_url: string }).media_url.startsWith("data:image/"))
+      );
+
     const updates: Record<string, unknown> = { updated_at: new Date().toISOString() };
     if (status !== undefined) updates.status = status;
     if (title !== undefined) updates.title = title.trim();
     if (category !== undefined) updates.category = category;
-    if (type !== undefined) updates.type = type;
+    if (notes !== undefined) updates.notes = notes;
+    if (type !== undefined) {
+      updates.type = type === "text" && hasImageOptions ? "image" : type;
+    } else if (hasImageOptions) {
+      updates.type = "image";
+    }
 
     const { data, error } = await supabase
       .from("questions")
@@ -329,6 +363,33 @@ export async function PUT(req: NextRequest) {
   return handleUpdateQuestion(req);
 }
 
+async function performDeleteQuestion(
+  supabase: ReturnType<typeof createServiceClient>,
+  id: string
+) {
+  // Fetch all option IDs for this question so we also clean up any answers referencing option_id
+  const { data: opts } = await supabase
+    .from("question_options")
+    .select("id")
+    .eq("question_id", id);
+
+  const optIds = (opts ?? []).map((o: { id: string }) => o.id);
+  if (optIds.length > 0) {
+    await supabase.from("answers").delete().in("option_id", optIds);
+  }
+
+  // Clean up dependent rows first so FK constraints never block deletion
+  await supabase.from("answers").delete().eq("question_id", id);
+  await supabase.from("session_questions").delete().eq("question_id", id);
+  await supabase.from("question_options").delete().eq("question_id", id);
+
+  const { error } = await supabase.from("questions").delete().eq("id", id);
+  if (error) {
+    return NextResponse.json({ error: error.message }, { status: 500 });
+  }
+  return NextResponse.json({ ok: true, deletedId: id });
+}
+
 export async function DELETE(req: NextRequest) {
   try {
     const supabase = createServiceClient();
@@ -343,16 +404,7 @@ export async function DELETE(req: NextRequest) {
       return NextResponse.json({ error: "Question ID is required" }, { status: 400 });
     }
 
-    // Clean up dependent rows first so FK constraints never block deletion
-    await supabase.from("answers").delete().eq("question_id", id);
-    await supabase.from("session_questions").delete().eq("question_id", id);
-    await supabase.from("question_options").delete().eq("question_id", id);
-
-    const { error } = await supabase.from("questions").delete().eq("id", id);
-    if (error) {
-      return NextResponse.json({ error: error.message }, { status: 500 });
-    }
-    return NextResponse.json({ ok: true });
+    return performDeleteQuestion(supabase, id);
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "Failed to delete question" },

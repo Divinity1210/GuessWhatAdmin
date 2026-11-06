@@ -814,6 +814,18 @@ export default function AdminGameplayAnalyticsPage() {
                                     style={{ backgroundColor: opt.media_url }}
                                   />
                                 )}
+                                {opt.media_url &&
+                                  (opt.media_url.startsWith("http") ||
+                                    opt.media_url.startsWith("data:image/")) && (
+                                    <img
+                                      src={opt.media_url}
+                                      alt={opt.label}
+                                      width={48}
+                                      height={36}
+                                      loading="lazy"
+                                      className="w-12 h-9 rounded-lg object-cover border border-white/20 shrink-0 bg-slate-900"
+                                    />
+                                  )}
                                 <span>{opt.label}</span>
                               </th>
                               <td className="px-4 py-3 font-mono font-bold text-slate-200 tabular-nums">

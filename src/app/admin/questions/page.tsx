@@ -28,6 +28,7 @@ type Question = {
   type: "text" | "number" | "color" | "image";
   status: string;
   tags: string[];
+  notes?: string | null;
   created_at: string;
   total_guesses?: number;
   sessions_used_count?: number;
@@ -47,6 +48,10 @@ type SessionSummary = {
 
 const STATUSES = ["draft", "published", "archived"];
 const CATEGORIES = [
+  "Food",
+  "Cars",
+  "Fruits",
+  "Snacks",
   "Gifts",
   "Bathing Soap",
   "Breakfast",
@@ -61,14 +66,10 @@ const CATEGORIES = [
   "Hangout",
   "Colour",
   "Number",
-  "Food",
-  "Cars",
   "Country to Visit",
   "Romantic Gesture",
-  "Snacks",
   "Social Media",
   "Drinks",
-  "Fruits",
   "Protein",
   "Lifestyle",
 ];
@@ -86,7 +87,88 @@ const DEFAULT_COLOR_OPTIONS = [
   { label: "Pink", media_url: "#FF00C7" },
 ];
 
-// Curated 10-option Nigerian & Global Crowd Templates from Product Doc Pages 14–15 & 30
+function isImageUrl(url?: string | null): boolean {
+  if (!url) return false;
+  return url.startsWith("http://") || url.startsWith("https://") || url.startsWith("data:image/") || url.startsWith("blob:");
+}
+
+function formatFilenameToLabel(filename: string): string {
+  return filename
+    .replace(/\.[^/.]+$/, "")
+    .replace(/[-_]+/g, " ")
+    .replace(/\b\w/g, (c) => c.toUpperCase())
+    .trim()
+    .slice(0, 24);
+}
+
+/**
+ * Compress & resize image file on client before uploading to Supabase Storage
+ * so even 10MB camera photos upload in <300ms.
+ */
+async function compressImageFile(file: File, maxWidth = 720, quality = 0.84): Promise<Blob> {
+  if (typeof window === "undefined" || file.type === "image/gif") {
+    return file;
+  }
+  return new Promise((resolve) => {
+    const img = new Image();
+    const objectUrl = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(objectUrl);
+      let { width, height } = img;
+      if (width > maxWidth) {
+        height = Math.round((height * maxWidth) / width);
+        width = maxWidth;
+      }
+      const canvas = document.createElement("canvas");
+      canvas.width = width;
+      canvas.height = height;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) {
+        resolve(file);
+        return;
+      }
+      ctx.drawImage(img, 0, 0, width, height);
+      canvas.toBlob(
+        (blob) => {
+          resolve(blob || file);
+        },
+        "image/jpeg",
+        quality
+      );
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      resolve(file);
+    };
+    img.src = objectUrl;
+  });
+}
+
+async function uploadImageToStorage(
+  file: File,
+  extra?: { optionId?: string; questionId?: string }
+): Promise<string> {
+  const compressed = await compressImageFile(file);
+  const formData = new FormData();
+  const safeFile = new File([compressed], file.name || "option.jpg", {
+    type: compressed.type || file.type || "image/jpeg",
+  });
+  formData.append("file", safeFile);
+  if (extra?.optionId) formData.append("optionId", extra.optionId);
+  if (extra?.questionId) formData.append("questionId", extra.questionId);
+
+  const res = await fetch("/api/admin/upload", {
+    method: "POST",
+    body: formData,
+  });
+  const data = await res.json();
+  if (!res.ok || !data.url) {
+    throw new Error(data.error || "Image upload failed");
+  }
+  return data.url as string;
+}
+
+// Curated 10-option Nigerian & Global Crowd Templates (Picture + Text Templates from Product Doc Pages 11–15 & 30)
 const AI_QUESTION_TEMPLATES: {
   key: string;
   category: string;
@@ -94,6 +176,96 @@ const AI_QUESTION_TEMPLATES: {
   type: "text" | "number" | "color" | "image";
   options: { label: string; media_url: string }[];
 }[] = [
+  {
+    key: "Picture: Nigerian Food (Page 11)",
+    category: "Food",
+    title: "Which food will be selected the most?",
+    type: "image",
+    options: [
+      { label: "Jollof Rice", media_url: "https://images.unsplash.com/photo-1604329760661-e71dc83f8f26?auto=format&fit=crop&w=500&q=80" },
+      { label: "Egusi & Pounded Yam", media_url: "https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=500&q=80" },
+      { label: "Amala & Ewedu", media_url: "https://images.unsplash.com/photo-1512621776951-a57141f2eefd?auto=format&fit=crop&w=500&q=80" },
+      { label: "Okra & Eba", media_url: "https://images.unsplash.com/photo-1547592180-85f173990554?auto=format&fit=crop&w=500&q=80" },
+      { label: "Abula", media_url: "https://images.unsplash.com/photo-1565299624946-b28f40a0ae38?auto=format&fit=crop&w=500&q=80" },
+      { label: "Ofada Rice", media_url: "https://images.unsplash.com/photo-1536304993881-ff6e9eefa2a6?auto=format&fit=crop&w=500&q=80" },
+      { label: "Edikang Ikong", media_url: "https://images.unsplash.com/photo-1540420773420-3366772f4999?auto=format&fit=crop&w=500&q=80" },
+      { label: "Rice & Stew", media_url: "https://images.unsplash.com/photo-1516684732162-798a0062be99?auto=format&fit=crop&w=500&q=80" },
+      { label: "Beans & Plantain", media_url: "https://images.unsplash.com/photo-1585937421612-70a008356fbe?auto=format&fit=crop&w=500&q=80" },
+      { label: "Bole & Fish", media_url: "https://images.unsplash.com/photo-1555939594-58d7cb561ad1?auto=format&fit=crop&w=500&q=80" },
+    ],
+  },
+  {
+    key: "Picture: Cars Most Selected (Page 12)",
+    category: "Cars",
+    title: "Which car will be selected the most?",
+    type: "image",
+    options: [
+      { label: "Range Rover", media_url: "https://images.unsplash.com/photo-1563720223185-11003d516935?auto=format&fit=crop&w=500&q=80" },
+      { label: "Bugatti", media_url: "https://images.unsplash.com/photo-1566008885218-90abf9200ddb?auto=format&fit=crop&w=500&q=80" },
+      { label: "Tesla", media_url: "https://images.unsplash.com/photo-1560958089-b8a1929cea89?auto=format&fit=crop&w=500&q=80" },
+      { label: "BMW", media_url: "https://images.unsplash.com/photo-1555215695-3004980ad54e?auto=format&fit=crop&w=500&q=80" },
+      { label: "Mustang", media_url: "https://images.unsplash.com/photo-1584345604476-8ec5e12e42dd?auto=format&fit=crop&w=500&q=80" },
+      { label: "G-Wagon", media_url: "https://images.unsplash.com/photo-1520031441872-265e4ff70366?auto=format&fit=crop&w=500&q=80" },
+      { label: "Rolls-Royce", media_url: "https://images.unsplash.com/photo-1631295868223-63265b40d9e4?auto=format&fit=crop&w=500&q=80" },
+      { label: "Ferrari", media_url: "https://images.unsplash.com/photo-1583121274602-3e2820c69888?auto=format&fit=crop&w=500&q=80" },
+      { label: "Lamborghini", media_url: "https://images.unsplash.com/photo-1544829099-b9a0c07fad1a?auto=format&fit=crop&w=500&q=80" },
+      { label: "McLaren", media_url: "https://images.unsplash.com/photo-1621135802920-133df287f89c?auto=format&fit=crop&w=500&q=80" },
+    ],
+  },
+  {
+    key: "Picture: Cars Least Selected (Page 13)",
+    category: "Cars",
+    title: "Which car will be selected the least?",
+    type: "image",
+    options: [
+      { label: "Range Rover", media_url: "https://images.unsplash.com/photo-1563720223185-11003d516935?auto=format&fit=crop&w=500&q=80" },
+      { label: "Bugatti", media_url: "https://images.unsplash.com/photo-1566008885218-90abf9200ddb?auto=format&fit=crop&w=500&q=80" },
+      { label: "Tesla", media_url: "https://images.unsplash.com/photo-1560958089-b8a1929cea89?auto=format&fit=crop&w=500&q=80" },
+      { label: "BMW", media_url: "https://images.unsplash.com/photo-1555215695-3004980ad54e?auto=format&fit=crop&w=500&q=80" },
+      { label: "Mustang", media_url: "https://images.unsplash.com/photo-1584345604476-8ec5e12e42dd?auto=format&fit=crop&w=500&q=80" },
+      { label: "G-Wagon", media_url: "https://images.unsplash.com/photo-1520031441872-265e4ff70366?auto=format&fit=crop&w=500&q=80" },
+      { label: "Rolls-Royce", media_url: "https://images.unsplash.com/photo-1631295868223-63265b40d9e4?auto=format&fit=crop&w=500&q=80" },
+      { label: "Ferrari", media_url: "https://images.unsplash.com/photo-1583121274602-3e2820c69888?auto=format&fit=crop&w=500&q=80" },
+      { label: "Lamborghini", media_url: "https://images.unsplash.com/photo-1544829099-b9a0c07fad1a?auto=format&fit=crop&w=500&q=80" },
+      { label: "McLaren", media_url: "https://images.unsplash.com/photo-1621135802920-133df287f89c?auto=format&fit=crop&w=500&q=80" },
+    ],
+  },
+  {
+    key: "Picture: Fruits (Page 14)",
+    category: "Fruits",
+    title: "Which fruit will be selected the most?",
+    type: "image",
+    options: [
+      { label: "Banana", media_url: "https://images.unsplash.com/photo-1571771894821-ce9b6c11b08e?auto=format&fit=crop&w=500&q=80" },
+      { label: "Mango", media_url: "https://images.unsplash.com/photo-1553279768-865429fa0078?auto=format&fit=crop&w=500&q=80" },
+      { label: "Pawpaw", media_url: "https://images.unsplash.com/photo-1517282009859-f000ec3b26fe?auto=format&fit=crop&w=500&q=80" },
+      { label: "Orange", media_url: "https://images.unsplash.com/photo-1547514701-42782101795e?auto=format&fit=crop&w=500&q=80" },
+      { label: "Pear", media_url: "https://images.unsplash.com/photo-1514756331096-242fdeb70d4a?auto=format&fit=crop&w=500&q=80" },
+      { label: "Apple", media_url: "https://images.unsplash.com/photo-1560806887-1e4cd0b6cbd6?auto=format&fit=crop&w=500&q=80" },
+      { label: "Pineapple", media_url: "https://images.unsplash.com/photo-1550258987-190a2d41a8ba?auto=format&fit=crop&w=500&q=80" },
+      { label: "Coconut", media_url: "https://images.unsplash.com/photo-1580984969071-a8da5656c2fb?auto=format&fit=crop&w=500&q=80" },
+      { label: "Watermelon", media_url: "https://images.unsplash.com/photo-1587049352846-4a222e784d38?auto=format&fit=crop&w=500&q=80" },
+      { label: "Tangerine", media_url: "https://images.unsplash.com/photo-1611080626919-7cf5a9dbab5b?auto=format&fit=crop&w=500&q=80" },
+    ],
+  },
+  {
+    key: "Picture: Snacks (Page 14)",
+    category: "Snacks",
+    title: "Which snack will be selected the most?",
+    type: "image",
+    options: [
+      { label: "Suya", media_url: "https://images.unsplash.com/photo-1544025162-d76694265947?auto=format&fit=crop&w=500&q=80" },
+      { label: "Kilishi", media_url: "https://images.unsplash.com/photo-1558030006-450675393462?auto=format&fit=crop&w=500&q=80" },
+      { label: "Pizza", media_url: "https://images.unsplash.com/photo-1513104890138-7c749659a591?auto=format&fit=crop&w=500&q=80" },
+      { label: "Small Chops", media_url: "https://images.unsplash.com/photo-1541592106381-b31e9677c0e5?auto=format&fit=crop&w=500&q=80" },
+      { label: "Popcorn", media_url: "https://images.unsplash.com/photo-1578849278619-e73505e9610f?auto=format&fit=crop&w=500&q=80" },
+      { label: "Fried Yam", media_url: "https://images.unsplash.com/photo-1573080496219-bb080dd4f877?auto=format&fit=crop&w=500&q=80" },
+      { label: "Plantain Chips", media_url: "https://images.unsplash.com/photo-1566478989037-eec170784d0b?auto=format&fit=crop&w=500&q=80" },
+      { label: "Cashew Nuts", media_url: "https://images.unsplash.com/photo-1509358271058-acd22cc93898?auto=format&fit=crop&w=500&q=80" },
+      { label: "Groundnut", media_url: "https://images.unsplash.com/photo-1567892737950-30c4db37cd89?auto=format&fit=crop&w=500&q=80" },
+      { label: "Meat Pie", media_url: "https://images.unsplash.com/photo-1509440159596-0249088772ff?auto=format&fit=crop&w=500&q=80" },
+    ],
+  },
   {
     key: "Gifts",
     category: "Gifts",
@@ -221,24 +393,6 @@ const AI_QUESTION_TEMPLATES: {
     ],
   },
   {
-    key: "Sports",
-    category: "Sports",
-    title: "Select a sport that you think other players will select",
-    type: "text",
-    options: [
-      { label: "Football", media_url: "" },
-      { label: "Basketball", media_url: "" },
-      { label: "Athletics (Track)", media_url: "" },
-      { label: "Boxing", media_url: "" },
-      { label: "Tennis", media_url: "" },
-      { label: "Table Tennis", media_url: "" },
-      { label: "Swimming", media_url: "" },
-      { label: "Volleyball", media_url: "" },
-      { label: "Formula 1", media_url: "" },
-      { label: "Wrestling", media_url: "" },
-    ],
-  },
-  {
     key: "Soft Drinks",
     category: "Soft Drinks",
     title: "Select a soft drink that you think other players will select",
@@ -254,42 +408,6 @@ const AI_QUESTION_TEMPLATES: {
       { label: "Amstel Malta", media_url: "" },
       { label: "Schweppes", media_url: "" },
       { label: "La Casera", media_url: "" },
-    ],
-  },
-  {
-    key: "Swallow",
-    category: "Swallow",
-    title: "Select a Nigerian swallow meal that you think other players will select",
-    type: "text",
-    options: [
-      { label: "Pounded Yam", media_url: "" },
-      { label: "Eba (Garri)", media_url: "" },
-      { label: "Amala", media_url: "" },
-      { label: "Semovita", media_url: "" },
-      { label: "Fufu (Akpu)", media_url: "" },
-      { label: "Wheat", media_url: "" },
-      { label: "Tuwo Shinkafa", media_url: "" },
-      { label: "Poundo Potato", media_url: "" },
-      { label: "Oat Meal Swallow", media_url: "" },
-      { label: "Plantain Fufu", media_url: "" },
-    ],
-  },
-  {
-    key: "Hangout",
-    category: "Hangout",
-    title: "Select a hangout spot that you think other players will select",
-    type: "text",
-    options: [
-      { label: "Eatery", media_url: "" },
-      { label: "Cinema", media_url: "" },
-      { label: "Beach", media_url: "" },
-      { label: "Lounge", media_url: "" },
-      { label: "Night Club", media_url: "" },
-      { label: "Shopping Mall", media_url: "" },
-      { label: "Amusement Park", media_url: "" },
-      { label: "Karaoke Bar", media_url: "" },
-      { label: "Game Arcade", media_url: "" },
-      { label: "Poolside", media_url: "" },
     ],
   },
   {
@@ -328,42 +446,6 @@ const AI_QUESTION_TEMPLATES: {
       { label: "Warm Hug", media_url: "" },
     ],
   },
-  {
-    key: "Snacks",
-    category: "Snacks",
-    title: "Select a snack that you think other players will select",
-    type: "text",
-    options: [
-      { label: "Meat Pie", media_url: "" },
-      { label: "Shawarma", media_url: "" },
-      { label: "Gala (Sausage Roll)", media_url: "" },
-      { label: "Puff-Puff", media_url: "" },
-      { label: "Chin-Chin", media_url: "" },
-      { label: "Egg Roll", media_url: "" },
-      { label: "Doughnut", media_url: "" },
-      { label: "Plantain Chips", media_url: "" },
-      { label: "Popcorn", media_url: "" },
-      { label: "Scotch Egg", media_url: "" },
-    ],
-  },
-  {
-    key: "Protein",
-    category: "Protein",
-    title: "Select a meal protein that you think other players will select",
-    type: "text",
-    options: [
-      { label: "Chicken", media_url: "" },
-      { label: "Turkey", media_url: "" },
-      { label: "Goat Meat (Asun)", media_url: "" },
-      { label: "Beef", media_url: "" },
-      { label: "Catfish", media_url: "" },
-      { label: "Titus Fish", media_url: "" },
-      { label: "Assorted (Shaki)", media_url: "" },
-      { label: "Ponmo", media_url: "" },
-      { label: "Boiled Egg", media_url: "" },
-      { label: "Snail", media_url: "" },
-    ],
-  },
 ];
 
 export default function QuestionsPage() {
@@ -372,18 +454,23 @@ export default function QuestionsPage() {
   const [selectedSessionId, setSelectedSessionId] = useState<string>("all");
   const [loading, setLoading] = useState(true);
   const [filter, setFilter] = useState("all");
+  const [typeFilter, setTypeFilter] = useState<"all" | "image" | "text" | "color" | "number">("all");
   const [search, setSearch] = useState("");
   const [showCreate, setShowCreate] = useState(false);
   const [showAIGenerator, setShowAIGenerator] = useState(false);
   const [selectedQuestionId, setSelectedQuestionId] = useState<string | null>(null);
   const [toast, setToast] = useState<string>("");
 
+  // Upload loading state keyed by slot identifier (e.g. "create-0", "edit-2", "inline-optId")
+  const [uploadingSlot, setUploadingSlot] = useState<Record<string, boolean>>({});
+
   // Create form state (10 options per Product Doc)
   const [title, setTitle] = useState("");
   const [category, setCategory] = useState(CATEGORIES[0]);
-  const [qType, setQType] = useState<"text" | "number" | "color" | "image">("text");
+  const [qType, setQType] = useState<"text" | "number" | "color" | "image">("image");
   const [createStatus, setCreateStatus] = useState<"published" | "draft">("published");
   const [assignSessionId, setAssignSessionId] = useState<string>("all");
+  const [questionBannerUrl, setQuestionBannerUrl] = useState<string>("");
   const [options, setOptions] = useState<{ label: string; media_url: string }[]>(
     Array.from({ length: 10 }, () => ({ label: "", media_url: "" }))
   );
@@ -395,22 +482,28 @@ export default function QuestionsPage() {
   const [editCategory, setEditCategory] = useState("");
   const [editType, setEditType] = useState<"text" | "number" | "color" | "image">("text");
   const [editStatus, setEditStatus] = useState<string>("published");
+  const [editBannerUrl, setEditBannerUrl] = useState<string>("");
   const [editOptions, setEditOptions] = useState<
     { id?: string; label: string; media_url: string }[]
   >([]);
   const [savingEdit, setSavingEdit] = useState(false);
+
+  // In-app Delete Confirmation Modal state (replaces window.confirm which can be blocked)
+  const [questionToDelete, setQuestionToDelete] = useState<Question | null>(null);
+  const [deleting, setDeleting] = useState(false);
 
   // Preview Modal state (5x2 player grid preview)
   const [previewQuestion, setPreviewQuestion] = useState<{
     title: string;
     category: string;
     type: "text" | "number" | "color" | "image";
+    notes?: string | null;
     options: { label: string; media_url?: string | null }[];
   } | null>(null);
 
   const showToastMsg = (msg: string) => {
     setToast(msg);
-    setTimeout(() => setToast(""), 4000);
+    setTimeout(() => setToast(""), 4500);
   };
 
   const loadQuestions = useCallback(async () => {
@@ -456,7 +549,164 @@ export default function QuestionsPage() {
     } else if (nextType === "color") {
       setOptions(DEFAULT_COLOR_OPTIONS.map((c) => ({ ...c })));
     } else {
-      setOptions(Array.from({ length: 10 }, () => ({ label: "", media_url: "" })));
+      setOptions((prev) =>
+        prev.map((o) => ({
+          label: o.label,
+          media_url: o.media_url.startsWith("#") ? "" : o.media_url,
+        }))
+      );
+    }
+  };
+
+  // Direct file upload for Create Option slot
+  const handleCreateOptionFileUpload = async (idx: number, file: File | null) => {
+    if (!file) return;
+    const slotKey = `create-${idx}`;
+    setUploadingSlot((p) => ({ ...p, [slotKey]: true }));
+    if (qType === "text") setQType("image");
+    try {
+      const uploadedUrl = await uploadImageToStorage(file);
+      setOptions((prev) => {
+        const next = [...prev];
+        const autoLabel = next[idx].label.trim() || formatFilenameToLabel(file.name);
+        next[idx] = { label: autoLabel, media_url: uploadedUrl };
+        return next;
+      });
+      showToastMsg(`Uploaded picture for Option ${idx + 1}!`);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to upload picture");
+    } finally {
+      setUploadingSlot((p) => ({ ...p, [slotKey]: false }));
+    }
+  };
+
+  // Bulk upload up to 10 pictures at once for Create Form
+  const handleCreateBulkFilesUpload = async (fileList: FileList | null) => {
+    if (!fileList || fileList.length === 0) return;
+    setQType("image");
+    const files = Array.from(fileList).slice(0, 10);
+    setUploadingSlot((p) => ({ ...p, "create-bulk": true }));
+    try {
+      const uploaded = await Promise.all(
+        files.map(async (f) => ({
+          url: await uploadImageToStorage(f),
+          name: formatFilenameToLabel(f.name),
+        }))
+      );
+      setOptions((prev) => {
+        const next = [...prev];
+        uploaded.forEach((item, idx) => {
+          if (idx < 10) {
+            next[idx] = {
+              label: next[idx].label.trim() || item.name || `Option ${idx + 1}`,
+              media_url: item.url,
+            };
+          }
+        });
+        return next;
+      });
+      showToastMsg(`Uploaded ${uploaded.length} picture(s) directly to Options!`);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to bulk upload pictures");
+    } finally {
+      setUploadingSlot((p) => ({ ...p, "create-bulk": false }));
+    }
+  };
+
+  // Direct file upload for Edit Modal Option slot
+  const handleEditOptionFileUpload = async (idx: number, file: File | null) => {
+    if (!file) return;
+    const slotKey = `edit-${idx}`;
+    setUploadingSlot((p) => ({ ...p, [slotKey]: true }));
+    if (editType === "text") setEditType("image");
+    try {
+      const uploadedUrl = await uploadImageToStorage(file);
+      setEditOptions((prev) => {
+        const next = [...prev];
+        const autoLabel = next[idx].label.trim() || formatFilenameToLabel(file.name);
+        next[idx] = { ...next[idx], label: autoLabel, media_url: uploadedUrl };
+        return next;
+      });
+      showToastMsg(`Uploaded picture for Option ${idx + 1}!`);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to upload picture");
+    } finally {
+      setUploadingSlot((p) => ({ ...p, [slotKey]: false }));
+    }
+  };
+
+  // Bulk upload up to 10 pictures at once in Edit Modal
+  const handleEditBulkFilesUpload = async (fileList: FileList | null) => {
+    if (!fileList || fileList.length === 0) return;
+    setEditType("image");
+    const files = Array.from(fileList).slice(0, 10);
+    setUploadingSlot((p) => ({ ...p, "edit-bulk": true }));
+    try {
+      const uploaded = await Promise.all(
+        files.map(async (f) => ({
+          url: await uploadImageToStorage(f),
+          name: formatFilenameToLabel(f.name),
+        }))
+      );
+      setEditOptions((prev) => {
+        const next = [...prev];
+        uploaded.forEach((item, idx) => {
+          if (idx < 10) {
+            next[idx] = {
+              ...next[idx],
+              label: next[idx].label.trim() || item.name || `Option ${idx + 1}`,
+              media_url: item.url,
+            };
+          }
+        });
+        return next;
+      });
+      showToastMsg(`Uploaded ${uploaded.length} picture(s) into question options!`);
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to upload pictures");
+    } finally {
+      setUploadingSlot((p) => ({ ...p, "edit-bulk": false }));
+    }
+  };
+
+  // Direct 1-click inline upload on an existing question option in the Selected Question Panel
+  const handleInlineOptionUpload = async (
+    questionId: string,
+    optionId: string,
+    optionLabel: string,
+    file: File | null
+  ) => {
+    if (!file) return;
+    const slotKey = `inline-${optionId}`;
+    setUploadingSlot((p) => ({ ...p, [slotKey]: true }));
+    try {
+      await uploadImageToStorage(file, { optionId, questionId });
+      showToastMsg(`Updated picture for "${optionLabel}"!`);
+      await loadQuestions();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to upload picture");
+    } finally {
+      setUploadingSlot((p) => ({ ...p, [slotKey]: false }));
+    }
+  };
+
+  // Question Banner / Prompt Picture Upload
+  const handleBannerUpload = async (mode: "create" | "edit", file: File | null) => {
+    if (!file) return;
+    const slotKey = `banner-${mode}`;
+    setUploadingSlot((p) => ({ ...p, [slotKey]: true }));
+    try {
+      const uploadedUrl = await uploadImageToStorage(file);
+      if (mode === "create") {
+        setQuestionBannerUrl(uploadedUrl);
+      } else {
+        setEditBannerUrl(uploadedUrl);
+      }
+      showToastMsg("Uploaded Question Prompt Picture!");
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to upload question picture");
+    } finally {
+      setUploadingSlot((p) => ({ ...p, [slotKey]: false }));
     }
   };
 
@@ -509,6 +759,7 @@ export default function QuestionsPage() {
           category,
           type: qType,
           status: createStatus,
+          notes: questionBannerUrl || null,
           options: validOpts,
           assignToSessionId:
             assignSessionId !== "all"
@@ -523,6 +774,7 @@ export default function QuestionsPage() {
         alert(data.error || "Failed to create question");
       } else {
         setTitle("");
+        setQuestionBannerUrl("");
         setOptions(Array.from({ length: 10 }, () => ({ label: "", media_url: "" })));
         setShowCreate(false);
         showToastMsg("Question saved to Question Bank!");
@@ -533,12 +785,13 @@ export default function QuestionsPage() {
     }
   };
 
-  const openEditModal = (q: Question) => {
+  const openEditModal = (q: Question, forceImageMode = false) => {
     setEditingQuestion(q);
     setEditTitle(q.title);
     setEditCategory(q.category);
-    setEditType(q.type);
+    setEditType(forceImageMode ? "image" : q.type);
     setEditStatus(q.status);
+    setEditBannerUrl(isImageUrl(q.notes) ? q.notes || "" : "");
     const padded = Array.from({ length: 10 }, (_, idx) => {
       const existing = q.question_options?.[idx];
       return {
@@ -564,6 +817,7 @@ export default function QuestionsPage() {
           category: editCategory,
           type: editType,
           status: editStatus,
+          notes: editBannerUrl || null,
           options: editOptions.filter((o) => o.label.trim()),
         }),
       });
@@ -590,20 +844,42 @@ export default function QuestionsPage() {
     await loadQuestions();
   };
 
-  const handleDeleteQuestion = async (q: Question) => {
-    if (
-      !window.confirm(
-        `Delete question "${q.title}" and its 10 options? This action cannot be undone.`
-      )
-    ) {
-      return;
-    }
-    const res = await fetch(`/api/admin/questions?id=${encodeURIComponent(q.id)}`, {
-      method: "DELETE",
-    });
-    if (res.ok) {
-      showToastMsg("Question deleted from Question Bank.");
+  const handleDeleteQuestion = (q: Question) => {
+    setQuestionToDelete(q);
+  };
+
+  const confirmDeleteQuestion = async () => {
+    if (!questionToDelete) return;
+    const target = questionToDelete;
+    setDeleting(true);
+    try {
+      let res = await fetch(`/api/admin/questions?id=${encodeURIComponent(target.id)}`, {
+        method: "DELETE",
+      });
+      if (!res.ok) {
+        res = await fetch("/api/admin/questions", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ action: "delete", id: target.id }),
+        });
+      }
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        alert(data.error || "Failed to delete question");
+        return;
+      }
+
+      setQuestions((prev) => prev.filter((item) => item.id !== target.id));
+      if (editingQuestion?.id === target.id) {
+        setEditingQuestion(null);
+      }
+      setQuestionToDelete(null);
+      showToastMsg(`Deleted question "${target.title}" from Question Bank.`);
       await loadQuestions();
+    } catch (err) {
+      alert(err instanceof Error ? err.message : "Failed to delete question");
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -620,6 +896,7 @@ export default function QuestionsPage() {
 
   const filteredQuestions = questions.filter((q) => {
     if (filter !== "all" && q.status !== filter) return false;
+    if (typeFilter !== "all" && q.type !== typeFilter) return false;
     if (search) {
       return (
         q.title.toLowerCase().includes(search.toLowerCase()) ||
@@ -628,6 +905,8 @@ export default function QuestionsPage() {
     }
     return true;
   });
+
+  const pictureQuestionCount = questions.filter((q) => q.type === "image").length;
 
   const selectedQuestion =
     questions.find((q) => q.id === selectedQuestionId) ?? filteredQuestions[0] ?? null;
@@ -638,27 +917,40 @@ export default function QuestionsPage() {
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
         <div>
           <span className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-amber-500/10 border border-amber-500/20 text-xs font-semibold text-amber-300 mb-2">
-            Pages 14–15, 30, 34, 36 · Question Bank &amp; Session Questions
+            Pages 11–15, 26, 30, 34, 36 · Picture &amp; Text Question Bank
           </span>
           <h1 className="text-3xl font-extrabold text-white tracking-tight">
-            Question Management &amp; AI Question Bank
+            Question Management &amp; Picture Question Studio
           </h1>
           <p className="text-slate-400 text-sm mt-1">
-            Create, edit, preview, and publish 10-option crowd questions across Text, Number, Colour, and Image formats.
+            Create, upload images directly from your device, preview, and publish 10-option crowd questions across Picture, Text, Number, and Colour formats.
           </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-2.5">
           <button
+            type="button"
             onClick={() => {
               setShowAIGenerator(!showAIGenerator);
               setShowCreate(false);
             }}
             className="inline-flex items-center gap-2 px-4 py-3 rounded-2xl bg-indigo-500/20 hover:bg-indigo-500/30 border border-indigo-500/40 text-indigo-200 font-bold text-xs sm:text-sm transition-all"
           >
-            <span>✦ AI Question Bank Generator (15 Templates)</span>
+            <span>✦ Question Bank Templates (Picture &amp; Text)</span>
           </button>
           <button
+            type="button"
+            onClick={() => {
+              setQType("image");
+              setShowCreate(true);
+              setShowAIGenerator(false);
+            }}
+            className="inline-flex items-center gap-2 px-4 py-3 rounded-2xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs sm:text-sm transition-all"
+          >
+            <span>📷 + Create Picture Question</span>
+          </button>
+          <button
+            type="button"
             onClick={() => {
               setShowCreate(!showCreate);
               setShowAIGenerator(false);
@@ -671,22 +963,30 @@ export default function QuestionsPage() {
       </div>
 
       {toast && (
-        <div className="rounded-2xl px-4 py-3 bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-xs font-bold">
+        <div
+          role="status"
+          aria-live="polite"
+          className="rounded-2xl px-4 py-3 bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-xs font-bold"
+        >
           ✓ {toast}
         </div>
       )}
 
-      {/* Architecture Explanation Banner: Standalone Question Bank vs. 10 Questions per Session */}
+      {/* Architecture Explanation Banner */}
       <div className="rounded-2xl p-4 bg-[#0f1219] border border-white/10 flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div className="space-y-1">
           <p className="text-xs font-bold uppercase tracking-wider text-amber-400">
-            How Guess What Questions Work (Standalone Bank vs. 10-Question Sessions)
+            Picture &amp; Text Crowd Questions (Direct Image Upload Enabled)
           </p>
           <p className="text-xs text-slate-300 leading-relaxed">
-            Every question lives in the central <strong>Question Bank</strong> with <strong>10 options</strong> (laid out in a 5×2 player grid). Game Sessions pull a set of <strong>10 questions (Q1–Q10)</strong> from this bank. Switch below between the <strong>Standalone Question Bank (All Sessions)</strong> and any individual <strong>Game Session&apos;s 10 Assigned Questions</strong>.
+            Upload photos directly from your computer or phone for any question or its <strong>10 options</strong> (stored in Supabase Storage). Click <strong>📷 + Create Picture Question</strong> above, or click <strong>📷 Upload Photo</strong> on any option card below to add or change pictures immediately.
           </p>
         </div>
         <div className="flex items-center gap-3 shrink-0 text-xs">
+          <div className="px-3 py-2 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-center">
+            <p className="text-[10px] uppercase text-emerald-300 font-semibold">Picture Qs</p>
+            <p className="text-base font-black text-emerald-400">{pictureQuestionCount}</p>
+          </div>
           <div className="px-3 py-2 rounded-xl bg-white/[0.03] border border-white/10 text-center">
             <p className="text-[10px] uppercase text-slate-400 font-semibold">Bank Total</p>
             <p className="text-base font-black text-white">{questions.length}</p>
@@ -706,6 +1006,7 @@ export default function QuestionsPage() {
           </span>
           <div className="flex items-center gap-2">
             <button
+              type="button"
               onClick={goPrevSession}
               disabled={currentSessionIdx <= 0}
               className="px-3 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 disabled:opacity-40 text-xs font-bold text-slate-200 border border-white/10"
@@ -713,6 +1014,7 @@ export default function QuestionsPage() {
               ◀ Prev Session
             </button>
             <button
+              type="button"
               onClick={goNextSession}
               disabled={currentSessionIdx >= sessionIds.length - 1}
               className="px-3 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 disabled:opacity-40 text-xs font-bold text-slate-200 border border-white/10"
@@ -724,6 +1026,7 @@ export default function QuestionsPage() {
 
         <div className="flex items-center gap-2 overflow-x-auto pb-1">
           <button
+            type="button"
             onClick={() => setSelectedSessionId("all")}
             className={`px-3.5 py-2 rounded-xl text-xs font-bold shrink-0 transition-all ${
               selectedSessionId === "all"
@@ -738,6 +1041,7 @@ export default function QuestionsPage() {
             return (
               <button
                 key={s.id}
+                type="button"
                 onClick={() => setSelectedSessionId(s.id)}
                 className={`px-3.5 py-2 rounded-xl text-xs font-bold shrink-0 transition-all flex items-center gap-2 ${
                   active
@@ -759,26 +1063,27 @@ export default function QuestionsPage() {
         </div>
       </div>
 
-      {/* AI Question Bank Generator Panel (Pages 14–15 & 30 Templates) */}
+      {/* AI Question Bank Generator Panel (Picture + Text Templates) */}
       {showAIGenerator && (
         <div className="wimbf-glass rounded-3xl p-6 md:p-8 border border-indigo-500/40 space-y-5 shadow-2xl">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/10 pb-4">
             <div>
               <span className="text-[11px] font-bold uppercase tracking-wider text-indigo-300">
-                Pages 14–15 &amp; 30 · Curated Crowd Question Bank
+                Pages 11–15 &amp; 30 · Picture &amp; Text Crowd Question Bank
               </span>
               <h2 className="text-xl font-extrabold text-white mt-0.5">
-                AI 10-Option Question Bank Generator
+                10-Option Question Bank Templates (Includes Picture Questions)
               </h2>
               <p className="text-xs text-slate-400">
-                Select any of the 15 official Guess What categories below to customize its 10 crowd options or 1-click publish directly to the Question Bank.
+                Select any Picture or Text template below to customize its 10 options (and upload your own photos) or 1-click publish to the Question Bank.
               </p>
             </div>
             <button
+              type="button"
               onClick={() => setShowAIGenerator(false)}
               className="px-3.5 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-xs font-semibold text-slate-300"
             >
-              Close Generator
+              Close Templates
             </button>
           </div>
 
@@ -786,26 +1091,64 @@ export default function QuestionsPage() {
             {AI_QUESTION_TEMPLATES.map((tpl) => (
               <div
                 key={tpl.key}
-                className="rounded-2xl p-4 bg-[#0f1219] border border-white/10 hover:border-indigo-500/40 flex flex-col justify-between gap-3 transition-colors"
+                className={`rounded-2xl p-4 bg-[#0f1219] border flex flex-col justify-between gap-3 transition-colors ${
+                  tpl.type === "image"
+                    ? "border-emerald-500/40 hover:border-emerald-400"
+                    : "border-white/10 hover:border-indigo-500/40"
+                }`}
               >
-                <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                    <span className="px-2.5 py-0.5 rounded-full bg-indigo-500/20 text-indigo-300 text-[11px] font-bold uppercase">
+                <div className="space-y-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span
+                      className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold uppercase ${
+                        tpl.type === "image"
+                          ? "bg-emerald-500/20 text-emerald-300"
+                          : "bg-indigo-500/20 text-indigo-300"
+                      }`}
+                    >
+                      {tpl.type === "image" ? "🖼 " : ""}
                       {tpl.key}
                     </span>
-                    <span className="text-[11px] text-slate-400 font-mono">10 Options</span>
+                    <span className="text-[11px] text-slate-400 font-mono shrink-0">
+                      {tpl.type === "image" ? "10 Photos" : "10 Options"}
+                    </span>
                   </div>
                   <p className="text-xs font-bold text-white leading-snug">{tpl.title}</p>
-                  <div className="flex flex-wrap gap-1 pt-1">
-                    {tpl.options.map((o, idx) => (
-                      <span
-                        key={idx}
-                        className="px-2 py-0.5 rounded bg-white/[0.04] border border-white/5 text-[10px] text-slate-300"
-                      >
-                        {idx + 1}. {o.label}
-                      </span>
-                    ))}
-                  </div>
+
+                  {tpl.type === "image" ? (
+                    <div className="grid grid-cols-5 gap-1.5 pt-1">
+                      {tpl.options.map((o, idx) => (
+                        <div
+                          key={idx}
+                          className="rounded-lg overflow-hidden bg-slate-900 border border-white/10"
+                          title={o.label}
+                        >
+                          <img
+                            src={o.media_url}
+                            alt={o.label}
+                            width={80}
+                            height={60}
+                            loading="lazy"
+                            className="w-full h-10 object-cover"
+                          />
+                          <p className="text-[9px] text-slate-300 truncate px-1 py-0.5 text-center">
+                            {o.label}
+                          </p>
+                        </div>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="flex flex-wrap gap-1 pt-1">
+                      {tpl.options.map((o, idx) => (
+                        <span
+                          key={idx}
+                          className="px-2 py-0.5 rounded bg-white/[0.04] border border-white/5 text-[10px] text-slate-300"
+                        >
+                          {idx + 1}. {o.label}
+                        </span>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
                 <div className="flex items-center gap-2 pt-2 border-t border-white/5">
@@ -814,7 +1157,7 @@ export default function QuestionsPage() {
                     onClick={() => applyAITemplateToForm(tpl)}
                     className="flex-1 px-3 py-2 rounded-xl bg-white/5 hover:bg-white/10 text-slate-200 font-bold text-xs transition-colors"
                   >
-                    Customize in Editor
+                    Customize / Upload Photos
                   </button>
                   <button
                     type="button"
@@ -831,7 +1174,7 @@ export default function QuestionsPage() {
         </div>
       )}
 
-      {/* Create Question Form */}
+      {/* Create Question Form with Direct Image Upload */}
       {showCreate && (
         <form
           onSubmit={handleCreate}
@@ -839,18 +1182,21 @@ export default function QuestionsPage() {
         >
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/10 pb-4">
             <div>
-              <h2 className="text-lg font-bold text-white">Create 10-Option Question</h2>
+              <h2 className="text-lg font-bold text-white">
+                Create 10-Option Question (Direct Picture Upload Enabled)
+              </h2>
               <p className="text-xs text-slate-400">
-                Supports Text (10 words), Number (0–9), Colour (10 hex circles), and Image (10 medium photos)
+                Upload images directly from your device for Picture-based questions, or create Text, Number, and Colour questions.
               </p>
             </div>
             <button
               type="button"
               onClick={() =>
                 setPreviewQuestion({
-                  title: title || "Select an option that you think other players will select",
+                  title: title || "Which option will be selected the most?",
                   category,
                   type: qType,
+                  notes: questionBannerUrl || null,
                   options,
                 })
               }
@@ -862,41 +1208,56 @@ export default function QuestionsPage() {
 
           <div className="grid gap-4 md:grid-cols-4">
             <div className="md:col-span-2">
-              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1.5">
-                Question Prompt
+              <label
+                htmlFor="create-question-prompt"
+                className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1.5"
+              >
+                Question Prompt *
               </label>
               <input
+                id="create-question-prompt"
+                name="title"
                 value={title}
                 onChange={(e) => setTitle(e.target.value)}
                 required
                 className="w-full rounded-xl border border-white/10 bg-white/[0.03] px-4 py-3 text-sm text-white focus:border-amber-500 focus:outline-none"
-                placeholder="e.g., Select a hangout spot that you think other players will select"
+                placeholder="e.g., Which food will be selected the most?"
               />
             </div>
 
             <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1.5">
-                Format
+              <label
+                htmlFor="create-question-format"
+                className="block text-xs font-semibold uppercase tracking-wider text-emerald-300 mb-1.5"
+              >
+                Question Format
               </label>
               <select
+                id="create-question-format"
+                name="type"
                 value={qType}
                 onChange={(e) =>
                   handleTypeChange(e.target.value as "text" | "number" | "color" | "image")
                 }
-                className="w-full rounded-xl border border-white/10 bg-[#0e121b] px-3 py-3 text-sm text-white focus:border-amber-500 focus:outline-none"
+                className="w-full rounded-xl border border-emerald-500/40 bg-[#0e121b] px-3 py-3 text-sm font-bold text-white focus:border-amber-500 focus:outline-none"
               >
-                <option value="text">Text (10 words)</option>
-                <option value="number">Number (0–9)</option>
-                <option value="color">Colour (10 circles)</option>
-                <option value="image">Image (10 photos)</option>
+                <option value="image">🖼 Picture (10 Image Options)</option>
+                <option value="text">Aa Text (10 Words)</option>
+                <option value="number">🔢 Number (0–9)</option>
+                <option value="color">🎨 Colour (10 Circles)</option>
               </select>
             </div>
 
             <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1.5">
+              <label
+                htmlFor="create-question-category"
+                className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1.5"
+              >
                 Category
               </label>
               <select
+                id="create-question-category"
+                name="category"
                 value={category}
                 onChange={(e) => setCategory(e.target.value)}
                 className="w-full rounded-xl border border-white/10 bg-[#0e121b] px-3 py-3 text-sm text-white focus:border-amber-500 focus:outline-none"
@@ -910,12 +1271,71 @@ export default function QuestionsPage() {
             </div>
           </div>
 
+          {/* Optional Question Header / Prompt Image Direct Upload */}
+          <div className="rounded-2xl p-4 bg-[#0b0e14] border border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+            <div className="flex items-center gap-3">
+              {questionBannerUrl ? (
+                <img
+                  src={questionBannerUrl}
+                  alt="Question prompt preview"
+                  width={96}
+                  height={64}
+                  className="w-20 h-14 rounded-xl object-cover border border-emerald-500/40 shrink-0"
+                />
+              ) : (
+                <div className="w-20 h-14 rounded-xl bg-white/[0.03] border border-dashed border-white/20 flex items-center justify-center text-xs text-slate-500 shrink-0">
+                  No Banner
+                </div>
+              )}
+              <div>
+                <p className="text-xs font-bold text-white">
+                  Question Prompt Picture (Optional Header Photo)
+                </p>
+                <p className="text-[11px] text-slate-400">
+                  Optionally attach a reference photo to the question prompt itself, or upload pictures for each of the 10 options below.
+                </p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2 shrink-0">
+              <input
+                id="create-banner-upload"
+                type="file"
+                accept="image/*"
+                className="sr-only"
+                onChange={(e) => handleBannerUpload("create", e.target.files?.[0] ?? null)}
+              />
+              <label
+                htmlFor="create-banner-upload"
+                className="cursor-pointer px-3.5 py-2 rounded-xl bg-white/10 hover:bg-white/15 border border-white/15 text-xs font-bold text-white transition-colors"
+              >
+                {uploadingSlot["banner-create"]
+                  ? "Uploading..."
+                  : questionBannerUrl
+                  ? "↻ Change Question Photo"
+                  : "📷 Upload Question Photo"}
+              </label>
+              {questionBannerUrl && (
+                <button
+                  type="button"
+                  onClick={() => setQuestionBannerUrl("")}
+                  className="px-2.5 py-2 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 text-xs font-bold"
+                >
+                  ✕ Remove
+                </button>
+              )}
+            </div>
+          </div>
+
           <div className="grid gap-4 sm:grid-cols-2">
             <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1.5">
+              <label
+                htmlFor="create-publish-status"
+                className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1.5"
+              >
                 Publish Status
               </label>
               <select
+                id="create-publish-status"
                 value={createStatus}
                 onChange={(e) => setCreateStatus(e.target.value as "published" | "draft")}
                 className="w-full rounded-xl border border-white/10 bg-[#0e121b] px-3 py-2.5 text-xs font-semibold text-white"
@@ -925,10 +1345,14 @@ export default function QuestionsPage() {
               </select>
             </div>
             <div>
-              <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1.5">
+              <label
+                htmlFor="create-assign-session"
+                className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1.5"
+              >
                 Assign to Game Session (Optional)
               </label>
               <select
+                id="create-assign-session"
                 value={assignSessionId}
                 onChange={(e) => setAssignSessionId(e.target.value)}
                 className="w-full rounded-xl border border-white/10 bg-[#0e121b] px-3 py-2.5 text-xs font-semibold text-white"
@@ -943,47 +1367,138 @@ export default function QuestionsPage() {
             </div>
           </div>
 
-          <div>
-            <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">
-              10 Options{" "}
-              {qType === "color"
-                ? "(Label + Hex Code)"
-                : qType === "image"
-                ? "(Label + Image URL)"
-                : ""}
-            </label>
-            <div className="grid gap-3 sm:grid-cols-2">
-              {options.map((opt, i) => (
-                <div key={i} className="flex items-center gap-2">
-                  <span className="size-8 rounded-lg bg-white/5 border border-white/10 flex items-center justify-center font-bold text-xs text-amber-400 shrink-0">
-                    {i + 1}
+          {/* 10 Options with Direct Image Upload */}
+          <fieldset className="space-y-3 border border-white/10 rounded-2xl p-4 bg-[#0b0e14]">
+            <legend className="px-2 text-xs font-bold uppercase tracking-wider text-amber-300">
+              10 Answer Options{" "}
+              {qType === "image"
+                ? "(Label + Direct Image Upload for Each Option)"
+                : qType === "color"
+                ? "(Label + Colour Picker)"
+                : "(Click 📷 Upload Photo on any option to make it a Picture Question)"}
+            </legend>
+
+            <div className="flex flex-wrap items-center justify-between gap-3 pb-2 border-b border-white/10">
+              <p className="text-xs text-slate-400">
+                Upload all 10 option photos at once from your device, or upload individual option photos below:
+              </p>
+              <div className="flex items-center gap-2">
+                <input
+                  id="create-bulk-option-images"
+                  type="file"
+                  accept="image/*"
+                  multiple
+                  className="sr-only"
+                  onChange={(e) => handleCreateBulkFilesUpload(e.target.files)}
+                />
+                <label
+                  htmlFor="create-bulk-option-images"
+                  className="cursor-pointer inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-extrabold text-xs transition-colors"
+                >
+                  <span>
+                    {uploadingSlot["create-bulk"]
+                      ? "Uploading Photos..."
+                      : "📁 Upload Up to 10 Option Pictures at Once"}
                   </span>
-                  <input
-                    value={opt.label}
-                    onChange={(e) => {
-                      const next = [...options];
-                      next[i] = { ...next[i], label: e.target.value };
-                      setOptions(next);
-                    }}
-                    placeholder={`Option ${i + 1} label`}
-                    className="flex-1 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2.5 text-sm text-white focus:border-amber-500 focus:outline-none"
-                  />
-                  {(qType === "color" || qType === "image") && (
-                    <input
-                      value={opt.media_url}
-                      onChange={(e) => {
-                        const next = [...options];
-                        next[i] = { ...next[i], media_url: e.target.value };
-                        setOptions(next);
-                      }}
-                      placeholder={qType === "color" ? "#FF1100" : "https://..."}
-                      className="w-36 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2.5 text-xs text-white focus:border-amber-500 focus:outline-none"
-                    />
-                  )}
-                </div>
-              ))}
+                </label>
+              </div>
             </div>
-          </div>
+
+            <div className="grid gap-3 sm:grid-cols-2">
+              {options.map((opt, i) => {
+                const isUploading = Boolean(uploadingSlot[`create-${i}`]);
+                const hasImg = isImageUrl(opt.media_url);
+                return (
+                  <div
+                    key={i}
+                    className="flex items-center gap-2.5 p-2.5 rounded-2xl bg-white/[0.02] border border-white/10"
+                  >
+                    <span className="size-8 rounded-lg bg-white/5 border border-white/10 flex items-center justify-center font-bold text-xs text-amber-400 shrink-0">
+                      {i + 1}
+                    </span>
+
+                    {/* Option Thumbnail Preview or Colour Swatch */}
+                    {qType === "color" ? (
+                      <input
+                        type="color"
+                        aria-label={`Option ${i + 1} colour`}
+                        value={opt.media_url.startsWith("#") ? opt.media_url : "#F59E0B"}
+                        onChange={(e) => {
+                          const next = [...options];
+                          next[i] = { ...next[i], media_url: e.target.value };
+                          setOptions(next);
+                        }}
+                        className="size-10 rounded-lg border border-white/20 bg-transparent cursor-pointer shrink-0"
+                      />
+                    ) : hasImg ? (
+                      <img
+                        src={opt.media_url}
+                        alt={opt.label || `Option ${i + 1}`}
+                        width={64}
+                        height={48}
+                        className="w-16 h-12 rounded-lg object-cover border border-emerald-500/40 shrink-0 bg-slate-900"
+                      />
+                    ) : (
+                      <div className="w-16 h-12 rounded-lg bg-white/[0.03] border border-dashed border-white/15 flex items-center justify-center text-[10px] text-slate-500 shrink-0">
+                        No Photo
+                      </div>
+                    )}
+
+                    <div className="flex-1 min-w-0">
+                      <label htmlFor={`create-opt-label-${i}`} className="sr-only">
+                        Option {i + 1} Label
+                      </label>
+                      <input
+                        id={`create-opt-label-${i}`}
+                        value={opt.label}
+                        onChange={(e) => {
+                          const next = [...options];
+                          next[i] = { ...next[i], label: e.target.value };
+                          setOptions(next);
+                        }}
+                        placeholder={`Option ${i + 1} label (e.g. Jollof Rice)`}
+                        className="w-full rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-white focus:border-amber-500 focus:outline-none"
+                      />
+                    </div>
+
+                    {qType !== "color" && qType !== "number" && (
+                      <div className="flex items-center gap-1 shrink-0">
+                        <input
+                          id={`create-opt-file-${i}`}
+                          type="file"
+                          accept="image/*"
+                          className="sr-only"
+                          onChange={(e) =>
+                            handleCreateOptionFileUpload(i, e.target.files?.[0] ?? null)
+                          }
+                        />
+                        <label
+                          htmlFor={`create-opt-file-${i}`}
+                          className="cursor-pointer px-2.5 py-2 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-300 text-[11px] font-bold transition-colors"
+                        >
+                          {isUploading ? "..." : hasImg ? "↻ Photo" : "📷 Upload"}
+                        </label>
+                        {hasImg && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              const next = [...options];
+                              next[i] = { ...next[i], media_url: "" };
+                              setOptions(next);
+                            }}
+                            title="Remove photo"
+                            className="px-2 py-2 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 text-[11px] font-bold"
+                          >
+                            ✕
+                          </button>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </fieldset>
 
           <div className="pt-4 border-t border-white/10 flex flex-wrap gap-3">
             <button
@@ -1001,9 +1516,10 @@ export default function QuestionsPage() {
               type="button"
               onClick={() =>
                 setPreviewQuestion({
-                  title: title || "Select an option that you think other players will select",
+                  title: title || "Which option will be selected the most?",
                   category,
                   type: qType,
+                  notes: questionBannerUrl || null,
                   options,
                 })
               }
@@ -1022,7 +1538,7 @@ export default function QuestionsPage() {
         </form>
       )}
 
-      {/* Real-Time Guesses & Ascribed Points Chart (Product Document Page 32 & 34) */}
+      {/* Selected Question Panel: 5x2 Picture Studio + Real-Time Guesses & Ascribed Points Chart */}
       {selectedQuestion && (
         <div className="wimbf-glass rounded-3xl p-6 md:p-8 border border-white/10 space-y-6">
           <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-white/10 pb-4">
@@ -1036,8 +1552,14 @@ export default function QuestionsPage() {
                 <span className="px-2.5 py-0.5 rounded-full bg-amber-500/20 text-amber-300 text-xs font-bold uppercase">
                   {selectedQuestion.category}
                 </span>
-                <span className="px-2.5 py-0.5 rounded-full bg-white/10 text-slate-300 text-xs font-semibold uppercase">
-                  Format: {selectedQuestion.type}
+                <span
+                  className={`px-2.5 py-0.5 rounded-full text-xs font-bold uppercase ${
+                    selectedQuestion.type === "image"
+                      ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40"
+                      : "bg-white/10 text-slate-300"
+                  }`}
+                >
+                  {selectedQuestion.type === "image" ? "🖼 Picture Question" : `Format: ${selectedQuestion.type}`}
                 </span>
                 <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 text-xs font-semibold">
                   Used in {selectedQuestion.sessions_used_count ?? 0} session(s)
@@ -1047,13 +1569,15 @@ export default function QuestionsPage() {
                 {selectedQuestion.title}
               </h2>
             </div>
-            <div className="flex items-center gap-3">
+            <div className="flex flex-wrap items-center gap-2.5">
               <button
+                type="button"
                 onClick={() =>
                   setPreviewQuestion({
                     title: selectedQuestion.title,
                     category: selectedQuestion.category,
                     type: selectedQuestion.type,
+                    notes: selectedQuestion.notes,
                     options: selectedQuestion.question_options ?? [],
                   })
                 }
@@ -1062,10 +1586,25 @@ export default function QuestionsPage() {
                 👁 Preview 5×2 Grid
               </button>
               <button
+                type="button"
+                onClick={() => openEditModal(selectedQuestion, true)}
+                className="px-3.5 py-2 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-300 text-xs font-bold"
+              >
+                📷 Upload / Edit Pictures
+              </button>
+              <button
+                type="button"
                 onClick={() => openEditModal(selectedQuestion)}
                 className="px-3.5 py-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-slate-200 text-xs font-bold"
               >
                 ✎ Edit Question
+              </button>
+              <button
+                type="button"
+                onClick={() => handleDeleteQuestion(selectedQuestion)}
+                className="px-3.5 py-2 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/30 text-rose-300 text-xs font-bold"
+              >
+                🗑 Delete Question
               </button>
               <div className="text-right pl-2">
                 <p className="text-xs uppercase tracking-wider text-slate-400">Total Guesses</p>
@@ -1076,8 +1615,101 @@ export default function QuestionsPage() {
             </div>
           </div>
 
+          {/* 5x2 Visual Option Cards with Direct 1-Click Photo Upload on Every Option */}
+          <div className="space-y-2.5">
+            <div className="flex items-center justify-between">
+              <p className="text-xs font-bold uppercase tracking-wider text-slate-400">
+                5×2 Option Grid — Click &ldquo;📷 Upload Photo&rdquo; on any option to upload an image directly
+              </p>
+              <button
+                type="button"
+                onClick={() => openEditModal(selectedQuestion, true)}
+                className="text-xs font-bold text-emerald-400 hover:underline"
+              >
+                Bulk Upload All 10 Photos →
+              </button>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
+              {(selectedQuestion.question_options ?? []).map((opt, idx) => {
+                const slotKey = `inline-${opt.id}`;
+                const isUploading = Boolean(uploadingSlot[slotKey]);
+                const hasImg = isImageUrl(opt.media_url);
+                return (
+                  <div
+                    key={opt.id}
+                    className="rounded-2xl overflow-hidden bg-[#0b0e14] border border-white/10 flex flex-col justify-between"
+                  >
+                    <div className="relative aspect-[4/3] w-full bg-slate-900 overflow-hidden">
+                      {hasImg ? (
+                        <img
+                          src={opt.media_url!}
+                          alt={opt.label}
+                          width={320}
+                          height={240}
+                          loading="lazy"
+                          className="w-full h-full object-cover"
+                        />
+                      ) : selectedQuestion.type === "color" && opt.media_url ? (
+                        <div
+                          className="w-full h-full flex items-center justify-center"
+                          style={{ backgroundColor: opt.media_url }}
+                        />
+                      ) : (
+                        <div className="w-full h-full flex flex-col items-center justify-center text-slate-500 text-xs p-2 text-center">
+                          <span>Option #{idx + 1}</span>
+                          <span className="text-[10px] text-slate-600">No photo yet</span>
+                        </div>
+                      )}
+                      <span className="absolute top-2 left-2 px-2 py-0.5 rounded-md bg-black/75 text-[10px] font-bold text-amber-300">
+                        {opt.points ?? 1} pts
+                      </span>
+                    </div>
+
+                    <div className="p-2.5 space-y-2">
+                      <div className="flex items-center justify-between gap-1">
+                        <p className="text-xs font-bold text-white truncate" title={opt.label}>
+                          {opt.label}
+                        </p>
+                        <span className="text-[10px] font-mono text-slate-400 shrink-0">
+                          {opt.percentage ?? 0}%
+                        </span>
+                      </div>
+
+                      <div>
+                        <input
+                          id={`inline-upload-${opt.id}`}
+                          type="file"
+                          accept="image/*"
+                          className="sr-only"
+                          onChange={(e) =>
+                            handleInlineOptionUpload(
+                              selectedQuestion.id,
+                              opt.id,
+                              opt.label,
+                              e.target.files?.[0] ?? null
+                            )
+                          }
+                        />
+                        <label
+                          htmlFor={`inline-upload-${opt.id}`}
+                          className="w-full cursor-pointer inline-flex items-center justify-center gap-1 px-2 py-1.5 rounded-lg bg-white/5 hover:bg-emerald-500/20 border border-white/10 hover:border-emerald-500/40 text-[11px] font-bold text-slate-300 hover:text-emerald-300 transition-colors"
+                        >
+                          {isUploading
+                            ? "Uploading..."
+                            : hasImg
+                            ? "↻ Change Photo"
+                            : "📷 Upload Photo"}
+                        </label>
+                      </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+
           {/* Horizontal Bar Chart of 10 Options with Live Points (10 pts down to 1 pt) */}
-          <div className="space-y-3">
+          <div className="space-y-3 pt-2 border-t border-white/10">
             {(() => {
               const opts = selectedQuestion.question_options ?? [];
               const maxGuesses = Math.max(...opts.map((o) => o.guesses ?? 0), 1);
@@ -1100,6 +1732,16 @@ export default function QuestionsPage() {
                         <span
                           className="size-3.5 rounded-full shrink-0 border border-white/20"
                           style={{ backgroundColor: opt.media_url }}
+                        />
+                      )}
+                      {isImageUrl(opt.media_url) && (
+                        <img
+                          src={opt.media_url!}
+                          alt={opt.label}
+                          width={32}
+                          height={24}
+                          loading="lazy"
+                          className="w-8 h-6 rounded object-cover shrink-0 border border-white/20"
                         />
                       )}
                       <span className="truncate">{opt.label}</span>
@@ -1145,14 +1787,15 @@ export default function QuestionsPage() {
         </div>
       )}
 
-      {/* Filter & Search Bar */}
-      <div className="wimbf-glass rounded-2xl p-4 flex flex-col md:flex-row items-center justify-between gap-4">
-        <div className="w-full md:w-auto flex items-center gap-2 overflow-x-auto">
+      {/* Filter & Search Bar (Includes Format Filter for Picture Questions) */}
+      <div className="wimbf-glass rounded-2xl p-4 flex flex-col lg:flex-row items-center justify-between gap-4">
+        <div className="w-full lg:w-auto flex flex-wrap items-center gap-2">
           {["all", ...STATUSES].map((s) => (
             <button
               key={s}
+              type="button"
               onClick={() => setFilter(s)}
-              className={`px-3.5 py-2 rounded-xl text-xs font-semibold uppercase tracking-wider ${
+              className={`px-3 py-1.5 rounded-xl text-xs font-semibold uppercase tracking-wider ${
                 filter === s
                   ? "bg-amber-500/20 text-amber-300 border border-amber-500/40"
                   : "bg-white/[0.02] text-slate-400 hover:text-slate-200"
@@ -1161,9 +1804,34 @@ export default function QuestionsPage() {
               {s}
             </button>
           ))}
+
+          <span className="h-4 w-px bg-white/10 mx-1" />
+
+          {(
+            [
+              { id: "all", label: "All Formats" },
+              { id: "image", label: `🖼 Picture (${pictureQuestionCount})` },
+              { id: "text", label: "Aa Text" },
+              { id: "color", label: "🎨 Colour" },
+              { id: "number", label: "🔢 Number" },
+            ] as const
+          ).map((tf) => (
+            <button
+              key={tf.id}
+              type="button"
+              onClick={() => setTypeFilter(tf.id)}
+              className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-colors ${
+                typeFilter === tf.id
+                  ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/40"
+                  : "bg-white/[0.02] text-slate-400 hover:text-slate-200"
+              }`}
+            >
+              {tf.label}
+            </button>
+          ))}
         </div>
 
-        <div className="w-full md:w-72">
+        <div className="w-full lg:w-72">
           <input
             type="text"
             value={search}
@@ -1186,7 +1854,7 @@ export default function QuestionsPage() {
             <table className="w-full text-left text-sm">
               <thead>
                 <tr className="border-b border-white/5 bg-white/[0.02] text-[11px] font-semibold uppercase tracking-widest text-slate-400">
-                  <th className="px-5 py-4">Question</th>
+                  <th className="px-5 py-4">Question &amp; Option Thumbnails</th>
                   <th className="px-4 py-4">Category</th>
                   <th className="px-4 py-4">Format</th>
                   <th className="px-4 py-4">Sessions Used</th>
@@ -1198,6 +1866,9 @@ export default function QuestionsPage() {
               <tbody className="divide-y divide-white/5">
                 {filteredQuestions.map((q) => {
                   const isSelected = selectedQuestion?.id === q.id;
+                  const imgOpts = (q.question_options ?? []).filter((o) =>
+                    isImageUrl(o.media_url)
+                  );
                   return (
                     <tr
                       key={q.id}
@@ -1215,13 +1886,43 @@ export default function QuestionsPage() {
                           )}
                           <span className="truncate">{q.title}</span>
                         </div>
-                        <p className="text-[11px] text-slate-400 mt-0.5">
-                          {q.question_options?.length ?? 0} options configured
-                        </p>
+                        {imgOpts.length > 0 ? (
+                          <div className="flex items-center gap-1.5 mt-2">
+                            {imgOpts.slice(0, 6).map((o) => (
+                              <img
+                                key={o.id}
+                                src={o.media_url!}
+                                alt={o.label}
+                                width={36}
+                                height={28}
+                                loading="lazy"
+                                className="w-9 h-7 rounded object-cover border border-white/15"
+                                title={o.label}
+                              />
+                            ))}
+                            {imgOpts.length > 6 && (
+                              <span className="text-[10px] font-mono text-emerald-300 pl-1">
+                                +{imgOpts.length - 6} photos
+                              </span>
+                            )}
+                          </div>
+                        ) : (
+                          <p className="text-[11px] text-slate-400 mt-0.5">
+                            {q.question_options?.length ?? 0} options configured
+                          </p>
+                        )}
                       </td>
                       <td className="px-4 py-4 text-xs text-slate-300">{q.category}</td>
-                      <td className="px-4 py-4 text-xs uppercase font-bold text-amber-400">
-                        {q.type}
+                      <td className="px-4 py-4 text-xs uppercase font-bold">
+                        <span
+                          className={`px-2 py-1 rounded-lg ${
+                            q.type === "image"
+                              ? "bg-emerald-500/20 text-emerald-300 border border-emerald-500/30"
+                              : "text-amber-400"
+                          }`}
+                        >
+                          {q.type === "image" ? "🖼 PICTURE" : q.type}
+                        </span>
                       </td>
                       <td className="px-4 py-4 text-xs">
                         <span className="inline-flex items-center px-2.5 py-0.5 rounded-full bg-white/5 border border-white/10 text-slate-200 font-semibold">
@@ -1248,6 +1949,7 @@ export default function QuestionsPage() {
                         onClick={(e) => e.stopPropagation()}
                       >
                         <select
+                          aria-label={`Status for ${q.title}`}
                           value={q.status}
                           onChange={(e) => updateStatus(q.id, e.target.value)}
                           className="rounded-xl border border-white/10 bg-[#0e121b] text-xs font-semibold px-2.5 py-1.5 text-slate-200"
@@ -1265,11 +1967,13 @@ export default function QuestionsPage() {
                       >
                         <div className="inline-flex items-center gap-1.5">
                           <button
+                            type="button"
                             onClick={() =>
                               setPreviewQuestion({
                                 title: q.title,
                                 category: q.category,
                                 type: q.type,
+                                notes: q.notes,
                                 options: q.question_options ?? [],
                               })
                             }
@@ -1278,12 +1982,21 @@ export default function QuestionsPage() {
                             Preview
                           </button>
                           <button
+                            type="button"
+                            onClick={() => openEditModal(q, true)}
+                            className="px-2.5 py-1.5 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 text-xs font-bold"
+                          >
+                            📷 Photos
+                          </button>
+                          <button
+                            type="button"
                             onClick={() => openEditModal(q)}
                             className="px-2.5 py-1.5 rounded-lg bg-white/5 hover:bg-white/10 text-slate-200 text-xs font-semibold"
                           >
                             Edit
                           </button>
                           <button
+                            type="button"
                             onClick={() => handleDeleteQuestion(q)}
                             className="px-2.5 py-1.5 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 text-rose-300 text-xs font-semibold"
                           >
@@ -1300,20 +2013,21 @@ export default function QuestionsPage() {
         </div>
       )}
 
-      {/* Edit Question Modal */}
+      {/* Edit Question Modal with Direct Image Upload */}
       {editingQuestion && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4 overflow-y-auto">
-          <div className="w-full max-w-3xl rounded-3xl bg-[#0f1219] border border-white/15 p-6 md:p-8 space-y-5 max-h-[90vh] overflow-y-auto shadow-2xl">
+          <div className="w-full max-w-4xl rounded-3xl bg-[#0f1219] border border-white/15 p-6 md:p-8 space-y-5 max-h-[92vh] overflow-y-auto shadow-2xl">
             <div className="flex items-center justify-between border-b border-white/10 pb-4">
               <div>
                 <h2 className="text-lg font-extrabold text-white">
-                  Edit Question &amp; 10 Options
+                  Edit Question &amp; Upload Option Pictures
                 </h2>
                 <p className="text-xs text-slate-400">
-                  Update prompt, category, format, status, or any of the 10 options
+                  Upload photos directly from your device for each of the 10 options, or update the question prompt and format.
                 </p>
               </div>
               <button
+                type="button"
                 onClick={() => setEditingQuestion(null)}
                 className="px-3 py-1.5 rounded-xl bg-white/5 hover:bg-white/10 text-xs font-bold text-slate-300"
               >
@@ -1323,10 +2037,14 @@ export default function QuestionsPage() {
 
             <form onSubmit={handleSaveEdit} className="space-y-4">
               <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">
+                <label
+                  htmlFor="edit-question-prompt"
+                  className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1"
+                >
                   Question Prompt
                 </label>
                 <input
+                  id="edit-question-prompt"
                   value={editTitle}
                   onChange={(e) => setEditTitle(e.target.value)}
                   required
@@ -1336,10 +2054,14 @@ export default function QuestionsPage() {
 
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">
+                  <label
+                    htmlFor="edit-question-category"
+                    className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1"
+                  >
                     Category
                   </label>
                   <select
+                    id="edit-question-category"
                     value={editCategory}
                     onChange={(e) => setEditCategory(e.target.value)}
                     className="w-full rounded-xl border border-white/10 bg-[#0e121b] px-3 py-2.5 text-xs text-white"
@@ -1352,27 +2074,35 @@ export default function QuestionsPage() {
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">
+                  <label
+                    htmlFor="edit-question-format"
+                    className="block text-xs font-semibold uppercase tracking-wider text-emerald-300 mb-1"
+                  >
                     Format
                   </label>
                   <select
+                    id="edit-question-format"
                     value={editType}
                     onChange={(e) =>
                       setEditType(e.target.value as "text" | "number" | "color" | "image")
                     }
-                    className="w-full rounded-xl border border-white/10 bg-[#0e121b] px-3 py-2.5 text-xs text-white"
+                    className="w-full rounded-xl border border-emerald-500/40 bg-[#0e121b] px-3 py-2.5 text-xs font-bold text-white"
                   >
-                    <option value="text">Text</option>
-                    <option value="number">Number</option>
-                    <option value="color">Colour</option>
-                    <option value="image">Image</option>
+                    <option value="image">🖼 Picture (10 Image Options)</option>
+                    <option value="text">Aa Text</option>
+                    <option value="number">🔢 Number</option>
+                    <option value="color">🎨 Colour</option>
                   </select>
                 </div>
                 <div>
-                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">
+                  <label
+                    htmlFor="edit-question-status"
+                    className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1"
+                  >
                     Status
                   </label>
                   <select
+                    id="edit-question-status"
                     value={editStatus}
                     onChange={(e) => setEditStatus(e.target.value)}
                     className="w-full rounded-xl border border-white/10 bg-[#0e121b] px-3 py-2.5 text-xs text-white"
@@ -1386,67 +2116,281 @@ export default function QuestionsPage() {
                 </div>
               </div>
 
-              <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-2">
-                  10 Options
-                </label>
-                <div className="grid gap-2.5 sm:grid-cols-2">
-                  {editOptions.map((opt, idx) => (
-                    <div key={idx} className="flex items-center gap-2">
-                      <span className="size-7 rounded-lg bg-white/5 border border-white/10 flex items-center justify-center font-bold text-xs text-amber-400 shrink-0">
-                        {idx + 1}
-                      </span>
-                      <input
-                        value={opt.label}
-                        onChange={(e) => {
-                          const next = [...editOptions];
-                          next[idx] = { ...next[idx], label: e.target.value };
-                          setEditOptions(next);
-                        }}
-                        className="flex-1 rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-white"
-                      />
-                      {(editType === "color" || editType === "image") && (
-                        <input
-                          value={opt.media_url}
-                          onChange={(e) => {
-                            const next = [...editOptions];
-                            next[idx] = { ...next[idx], media_url: e.target.value };
-                            setEditOptions(next);
-                          }}
-                          placeholder={editType === "color" ? "#FF1100" : "https://..."}
-                          className="w-28 rounded-xl border border-white/10 bg-white/[0.03] px-2.5 py-2 text-xs text-white"
-                        />
-                      )}
+              {/* Optional Question Prompt Picture Upload */}
+              <div className="rounded-2xl p-3.5 bg-[#0b0e14] border border-white/10 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="flex items-center gap-3">
+                  {editBannerUrl ? (
+                    <img
+                      src={editBannerUrl}
+                      alt="Question prompt"
+                      width={80}
+                      height={56}
+                      className="w-16 h-12 rounded-lg object-cover border border-emerald-500/40"
+                    />
+                  ) : (
+                    <div className="w-16 h-12 rounded-lg bg-white/[0.03] border border-dashed border-white/15 flex items-center justify-center text-[10px] text-slate-500">
+                      No Banner
                     </div>
-                  ))}
+                  )}
+                  <div>
+                    <p className="text-xs font-bold text-white">
+                      Question Header Photo (Optional)
+                    </p>
+                    <p className="text-[11px] text-slate-400">
+                      Upload a main question image if the prompt itself displays a photo.
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-2">
+                  <input
+                    id="edit-banner-upload"
+                    type="file"
+                    accept="image/*"
+                    className="sr-only"
+                    onChange={(e) => handleBannerUpload("edit", e.target.files?.[0] ?? null)}
+                  />
+                  <label
+                    htmlFor="edit-banner-upload"
+                    className="cursor-pointer px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/15 text-xs font-bold text-white"
+                  >
+                    {uploadingSlot["banner-edit"]
+                      ? "Uploading..."
+                      : editBannerUrl
+                      ? "↻ Change Photo"
+                      : "📷 Upload Question Photo"}
+                  </label>
+                  {editBannerUrl && (
+                    <button
+                      type="button"
+                      onClick={() => setEditBannerUrl("")}
+                      className="px-2.5 py-1.5 rounded-xl bg-rose-500/15 text-rose-300 text-xs font-bold"
+                    >
+                      ✕
+                    </button>
+                  )}
                 </div>
               </div>
 
-              <div className="flex justify-end gap-3 pt-4 border-t border-white/10">
+              <fieldset className="space-y-3 border border-white/10 rounded-2xl p-4 bg-[#0b0e14]">
+                <legend className="px-2 text-xs font-bold uppercase tracking-wider text-amber-300">
+                  10 Options (Direct Picture Upload)
+                </legend>
+
+                <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-white/10">
+                  <span className="text-xs text-slate-400">
+                    Select up to 10 images at once or upload individual option photos:
+                  </span>
+                  <div>
+                    <input
+                      id="edit-bulk-option-images"
+                      type="file"
+                      accept="image/*"
+                      multiple
+                      className="sr-only"
+                      onChange={(e) => handleEditBulkFilesUpload(e.target.files)}
+                    />
+                    <label
+                      htmlFor="edit-bulk-option-images"
+                      className="cursor-pointer inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-extrabold text-xs"
+                    >
+                      {uploadingSlot["edit-bulk"]
+                        ? "Uploading..."
+                        : "📁 Bulk Upload 10 Option Pictures"}
+                    </label>
+                  </div>
+                </div>
+
+                <div className="grid gap-2.5 sm:grid-cols-2">
+                  {editOptions.map((opt, idx) => {
+                    const isUploading = Boolean(uploadingSlot[`edit-${idx}`]);
+                    const hasImg = isImageUrl(opt.media_url);
+                    return (
+                      <div
+                        key={idx}
+                        className="flex items-center gap-2 p-2 rounded-xl bg-white/[0.02] border border-white/10"
+                      >
+                        <span className="size-7 rounded-lg bg-white/5 border border-white/10 flex items-center justify-center font-bold text-xs text-amber-400 shrink-0">
+                          {idx + 1}
+                        </span>
+
+                        {editType === "color" ? (
+                          <input
+                            type="color"
+                            aria-label={`Option ${idx + 1} colour`}
+                            value={opt.media_url.startsWith("#") ? opt.media_url : "#F59E0B"}
+                            onChange={(e) => {
+                              const next = [...editOptions];
+                              next[idx] = { ...next[idx], media_url: e.target.value };
+                              setEditOptions(next);
+                            }}
+                            className="size-9 rounded-lg border border-white/20 bg-transparent cursor-pointer shrink-0"
+                          />
+                        ) : hasImg ? (
+                          <img
+                            src={opt.media_url}
+                            alt={opt.label || `Option ${idx + 1}`}
+                            width={56}
+                            height={40}
+                            className="w-14 h-10 rounded-lg object-cover border border-emerald-500/40 shrink-0 bg-slate-900"
+                          />
+                        ) : (
+                          <div className="w-14 h-10 rounded-lg bg-white/[0.03] border border-dashed border-white/15 flex items-center justify-center text-[9px] text-slate-500 shrink-0">
+                            No Photo
+                          </div>
+                        )}
+
+                        <div className="flex-1 min-w-0">
+                          <label htmlFor={`edit-opt-label-${idx}`} className="sr-only">
+                            Option {idx + 1} Label
+                          </label>
+                          <input
+                            id={`edit-opt-label-${idx}`}
+                            value={opt.label}
+                            onChange={(e) => {
+                              const next = [...editOptions];
+                              next[idx] = { ...next[idx], label: e.target.value };
+                              setEditOptions(next);
+                            }}
+                            placeholder={`Option ${idx + 1} label`}
+                            className="w-full rounded-xl border border-white/10 bg-white/[0.03] px-3 py-2 text-xs text-white"
+                          />
+                        </div>
+
+                        {editType !== "color" && editType !== "number" && (
+                          <div className="flex items-center gap-1 shrink-0">
+                            <input
+                              id={`edit-opt-file-${idx}`}
+                              type="file"
+                              accept="image/*"
+                              className="sr-only"
+                              onChange={(e) =>
+                                handleEditOptionFileUpload(idx, e.target.files?.[0] ?? null)
+                              }
+                            />
+                            <label
+                              htmlFor={`edit-opt-file-${idx}`}
+                              className="cursor-pointer px-2.5 py-1.5 rounded-lg bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-300 text-[11px] font-bold"
+                            >
+                              {isUploading ? "..." : hasImg ? "↻ Photo" : "📷 Upload"}
+                            </label>
+                            {hasImg && (
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  const next = [...editOptions];
+                                  next[idx] = { ...next[idx], media_url: "" };
+                                  setEditOptions(next);
+                                }}
+                                className="px-2 py-1.5 rounded-lg bg-rose-500/15 text-rose-300 text-[11px] font-bold"
+                              >
+                                ✕
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </fieldset>
+
+              <div className="flex items-center justify-between gap-3 pt-4 border-t border-white/10">
                 <button
                   type="button"
-                  onClick={() => setEditingQuestion(null)}
-                  className="px-4 py-2.5 rounded-xl bg-white/5 text-slate-300 text-xs font-semibold"
+                  onClick={() => handleDeleteQuestion(editingQuestion)}
+                  className="px-4 py-2.5 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/30 text-rose-300 text-xs font-bold"
                 >
-                  Cancel
+                  🗑 Delete Question
                 </button>
-                <button
-                  type="submit"
-                  disabled={savingEdit}
-                  className="px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold"
-                >
-                  {savingEdit ? "Saving..." : "Save Changes"}
-                </button>
+                <div className="flex items-center gap-3">
+                  <button
+                    type="button"
+                    onClick={() => setEditingQuestion(null)}
+                    className="px-4 py-2.5 rounded-xl bg-white/5 text-slate-300 text-xs font-semibold"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    disabled={savingEdit}
+                    className="px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold"
+                  >
+                    {savingEdit ? "Saving..." : "Save Question & Pictures"}
+                  </button>
+                </div>
               </div>
             </form>
           </div>
         </div>
       )}
 
-      {/* 5x2 Player Grid Preview Modal (Page 36 Requirement: Preview Question Before/After Publishing) */}
+      {/* In-App Delete Question Confirmation Modal */}
+      {questionToDelete && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="delete-question-title"
+          className="fixed inset-0 z-[60] flex items-center justify-center bg-black/80 p-4"
+        >
+          <div className="w-full max-w-md rounded-3xl bg-[#111520] border border-rose-500/40 p-6 space-y-4 shadow-2xl">
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <span className="px-2.5 py-0.5 rounded-full bg-rose-500/20 text-rose-300 text-[11px] font-bold uppercase">
+                  Confirm Deletion
+                </span>
+                <h2 id="delete-question-title" className="text-lg font-extrabold text-white mt-1.5">
+                  Delete Question from Bank?
+                </h2>
+              </div>
+              <button
+                type="button"
+                onClick={() => setQuestionToDelete(null)}
+                className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-xs font-bold text-slate-300"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="rounded-2xl p-3.5 bg-white/[0.03] border border-white/10 space-y-1">
+              <p className="text-xs font-bold text-white leading-snug">
+                &ldquo;{questionToDelete.title}&rdquo;
+              </p>
+              <p className="text-[11px] text-slate-400">
+                Category: {questionToDelete.category} · Format: {questionToDelete.type.toUpperCase()} ·{" "}
+                {questionToDelete.question_options?.length ?? 10} options
+              </p>
+            </div>
+
+            <p className="text-xs text-slate-300 leading-relaxed">
+              This will permanently remove the question, its 10 options, and any session assignments from the Question Bank.
+            </p>
+
+            <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-white/10">
+              <button
+                type="button"
+                disabled={deleting}
+                onClick={() => setQuestionToDelete(null)}
+                className="px-4 py-2.5 rounded-xl bg-white/5 hover:bg-white/10 text-slate-200 text-xs font-semibold"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={deleting}
+                onClick={confirmDeleteQuestion}
+                className="px-5 py-2.5 rounded-xl bg-rose-500 hover:bg-rose-400 text-white text-xs font-extrabold shadow-lg shadow-rose-500/20"
+              >
+                {deleting ? "Deleting..." : "Yes, Delete Question"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 5x2 Player Grid Preview Modal (Renders Picture Options in Medium 5x2 Grid per Pages 11–13 & 26) */}
       {previewQuestion && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4">
-          <div className="w-full max-w-2xl rounded-3xl bg-[#140d26] border border-amber-500/40 p-6 md:p-8 space-y-6 shadow-2xl">
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 overflow-y-auto">
+          <div className="w-full max-w-3xl rounded-3xl bg-[#140d26] border border-amber-500/40 p-6 md:p-8 space-y-6 shadow-2xl">
             <div className="flex items-center justify-between border-b border-white/10 pb-4">
               <div className="flex items-center gap-2">
                 <span className="px-2.5 py-1 rounded-full bg-amber-500/20 text-amber-300 text-xs font-bold uppercase">
@@ -1457,6 +2401,7 @@ export default function QuestionsPage() {
                 </span>
               </div>
               <button
+                type="button"
                 onClick={() => setPreviewQuestion(null)}
                 className="px-3 py-1.5 rounded-xl bg-white/10 hover:bg-white/20 text-xs font-bold text-white"
               >
@@ -1464,44 +2409,90 @@ export default function QuestionsPage() {
               </button>
             </div>
 
-            <div className="text-center space-y-2 py-2">
+            <div className="text-center space-y-3 py-2">
               <p className="text-xs font-bold uppercase tracking-widest text-amber-400">
                 Guess What Other Players Will Select
               </p>
               <h3 className="text-xl sm:text-2xl font-black text-white">
                 {previewQuestion.title}
               </h3>
+              {isImageUrl(previewQuestion.notes) && (
+                <div className="flex justify-center pt-2">
+                  <img
+                    src={previewQuestion.notes!}
+                    alt={previewQuestion.title}
+                    width={360}
+                    height={220}
+                    className="max-h-48 rounded-2xl object-cover border border-white/20 shadow-lg"
+                  />
+                </div>
+              )}
             </div>
 
-            {/* 5x2 Grid Representation matching Pages 5–9 of Product Document */}
-            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-              {previewQuestion.options.slice(0, 10).map((opt, idx) => (
-                <div
-                  key={idx}
-                  className="rounded-2xl p-4 bg-white/[0.06] hover:bg-amber-500/20 border border-white/15 hover:border-amber-400 transition-all flex flex-col items-center justify-center gap-2 text-center cursor-pointer min-h-[92px]"
-                >
-                  {previewQuestion.type === "color" && (
-                    <span
-                      className="size-10 rounded-full border-2 border-white/30 shadow-md"
-                      style={{ backgroundColor: opt.media_url || "#F59E0B" }}
-                    />
-                  )}
-                  {previewQuestion.type === "number" ? (
-                    <span className="text-3xl font-black text-amber-400">
-                      {opt.label || idx}
-                    </span>
-                  ) : (
-                    <span className="text-xs sm:text-sm font-bold text-white leading-tight">
-                      {opt.label || `Option ${idx + 1}`}
-                    </span>
-                  )}
-                </div>
-              ))}
+            {/* 5x2 Grid Representation matching Pages 6–13 of Product Document */}
+            <div className="grid grid-cols-2 sm:grid-cols-5 gap-3.5">
+              {previewQuestion.options.slice(0, 10).map((opt, idx) => {
+                const hasImg = isImageUrl(opt.media_url);
+                return (
+                  <div
+                    key={idx}
+                    className="rounded-2xl overflow-hidden bg-white/[0.06] hover:bg-amber-500/20 border border-white/15 hover:border-amber-400 transition-all flex flex-col items-center justify-between cursor-pointer"
+                  >
+                    {(previewQuestion.type === "image" || hasImg) ? (
+                      <>
+                        <div className="aspect-[4/3] w-full bg-slate-900 overflow-hidden">
+                          {hasImg ? (
+                            <img
+                              src={opt.media_url!}
+                              alt={opt.label || `Option ${idx + 1}`}
+                              width={320}
+                              height={240}
+                              className="w-full h-full object-cover"
+                            />
+                          ) : (
+                            <div className="w-full h-full grid place-items-center text-xs text-slate-500">
+                              No Photo
+                            </div>
+                          )}
+                        </div>
+                        <div className="px-2.5 py-2 text-center w-full">
+                          <span className="text-xs font-bold text-white line-clamp-1">
+                            {opt.label || `Option ${idx + 1}`}
+                          </span>
+                        </div>
+                      </>
+                    ) : previewQuestion.type === "color" ? (
+                      <div className="p-4 flex flex-col items-center gap-2">
+                        <span
+                          className="size-12 rounded-full border-2 border-white/50 shadow-md"
+                          style={{ backgroundColor: opt.media_url || "#F59E0B" }}
+                        />
+                        <span className="text-xs font-bold text-white">
+                          {opt.label || `Option ${idx + 1}`}
+                        </span>
+                      </div>
+                    ) : previewQuestion.type === "number" ? (
+                      <div className="p-4 flex items-center justify-center min-h-[84px]">
+                        <span className="text-3xl font-black text-amber-400">
+                          {opt.label || idx}
+                        </span>
+                      </div>
+                    ) : (
+                      <div className="p-4 flex items-center justify-center min-h-[84px] text-center">
+                        <span className="text-xs sm:text-sm font-bold text-white leading-tight">
+                          {opt.label || `Option ${idx + 1}`}
+                        </span>
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
             </div>
 
             <div className="flex items-center justify-between text-xs text-slate-400 pt-2 border-t border-white/10">
               <span>10 Options · Points awarded dynamically from 10 pts (#1) down to 1 pt (#10)</span>
               <button
+                type="button"
                 onClick={() => setPreviewQuestion(null)}
                 className="px-4 py-2 rounded-xl bg-amber-500 text-slate-950 font-bold"
               >
