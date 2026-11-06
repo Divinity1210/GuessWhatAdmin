@@ -91,9 +91,16 @@ export async function GET(req: NextRequest) {
 
       const pointsByOption = new Map<string, number>();
       const rankByOption = new Map<string, number>();
+      let currentRankIdx = 0;
       ranked.forEach((opt, idx) => {
-        pointsByOption.set(opt.id, Math.max(10 - idx, 1));
-        rankByOption.set(opt.id, idx + 1);
+        const guesses = countByOption.get(opt.id) ?? 0;
+        const prevGuesses =
+          idx > 0 ? (countByOption.get(ranked[idx - 1].id) ?? 0) : guesses;
+        if (idx > 0 && guesses < prevGuesses) {
+          currentRankIdx = idx;
+        }
+        pointsByOption.set(opt.id, guesses > 0 ? Math.max(10 - currentRankIdx, 1) : 1);
+        rankByOption.set(opt.id, currentRankIdx + 1);
       });
 
       const totalQuestionGuesses = rawOpts.reduce(

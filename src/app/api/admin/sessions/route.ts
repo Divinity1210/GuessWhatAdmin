@@ -289,8 +289,15 @@ async function scoreAndPublishSession(sessionId: string) {
       const diff = (optionCount.get(b.id) ?? 0) - (optionCount.get(a.id) ?? 0);
       return diff !== 0 ? diff : a.position - b.position;
     });
+    let currentRankIdx = 0;
     ranked.forEach((opt, idx) => {
-      optionPoints.set(opt.id, Math.max(10 - idx, 1));
+      const count = optionCount.get(opt.id) ?? 0;
+      const prevCount =
+        idx > 0 ? (optionCount.get(ranked[idx - 1].id) ?? 0) : count;
+      if (idx > 0 && count < prevCount) {
+        currentRankIdx = idx;
+      }
+      optionPoints.set(opt.id, count > 0 ? Math.max(10 - currentRankIdx, 1) : 1);
     });
   }
 

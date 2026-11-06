@@ -220,8 +220,14 @@ export async function GET(req: NextRequest) {
         return diff !== 0 ? diff : a.position - b.position;
       });
 
+      let currentRankIdx = 0;
       ranked.forEach((opt, idx) => {
         const picks = optionPickCounts.get(opt.id) ?? 0;
+        const prevPicks =
+          idx > 0 ? (optionPickCounts.get(ranked[idx - 1].id) ?? 0) : picks;
+        if (idx > 0 && picks < prevPicks) {
+          currentRankIdx = idx;
+        }
         const pct = totalQ > 0 ? Number(((picks / totalQ) * 100).toFixed(1)) : 0;
         optionConsensus.set(opt.id, {
           optionId: opt.id,
@@ -229,8 +235,8 @@ export async function GET(req: NextRequest) {
           questionId: q.id,
           picks,
           percentage: pct,
-          consensusRank: idx + 1,
-          pointsAwarded: Math.max(10 - idx, 1),
+          consensusRank: currentRankIdx + 1,
+          pointsAwarded: picks > 0 ? Math.max(10 - currentRankIdx, 1) : 1,
         });
       });
     }
@@ -565,24 +571,32 @@ export async function PATCH(req: NextRequest) {
           const diff = (optionPicks.get(b.id) ?? 0) - (optionPicks.get(a.id) ?? 0);
           return diff !== 0 ? diff : a.position - b.position;
         });
+        let currentRankIdx = 0;
         ranked.forEach((opt, idx) => {
-          optionPts.set(opt.id, Math.max(10 - idx, 1));
+          const picks = optionPicks.get(opt.id) ?? 0;
+          const prevPicks =
+            idx > 0 ? (optionPicks.get(ranked[idx - 1].id) ?? 0) : picks;
+          if (idx > 0 && picks < prevPicks) {
+            currentRankIdx = idx;
+          }
+          optionPts.set(opt.id, picks > 0 ? Math.max(10 - currentRankIdx, 1) : 1);
         });
       }
 
-      const entryAgg = new Map<string, { score: number; ms: number }>();
+      const entryAgg = new Map<string, { score: number; ms: number; count: number }>();
       for (const a of answers ?? []) {
-        const cur = entryAgg.get(a.entry_id) ?? { score: 0, ms: 0 };
+        const cur = entryAgg.get(a.entry_id) ?? { score: 0, ms: 0, count: 0 };
         cur.score += optionPts.get(a.option_id) ?? 1;
         cur.ms += Number(a.response_ms ?? 0);
+        cur.count += 1;
         entryAgg.set(a.entry_id, cur);
       }
 
       const scored = (entries ?? []).map((e) => {
         const agg = entryAgg.get(e.id);
-        let bestScore = Math.max(agg ? agg.score : 0, Number(e.total_score ?? 0));
+        let bestScore = agg && agg.count > 0 ? agg.score : Number(e.total_score ?? 0);
         let bestMs =
-          agg && agg.score >= Number(e.total_score ?? 0) && agg.ms > 0
+          agg && agg.count > 0 && agg.ms > 0
             ? agg.ms
             : Number(e.total_response_ms ?? (agg?.ms || 45000));
 
@@ -595,13 +609,14 @@ export async function PATCH(req: NextRequest) {
           const d = (log.detail ?? {}) as ArchivedAttemptDetail;
           let archDynScore = 0;
           let archDynMs = 0;
-          if (Array.isArray(d.answers)) {
-            for (const ans of d.answers) {
+          const hasArchAnswers = Array.isArray(d.answers) && d.answers.length > 0;
+          if (hasArchAnswers) {
+            for (const ans of d.answers!) {
               archDynScore += optionPts.get(ans.option_id) ?? 1;
               archDynMs += Number(ans.response_ms ?? 0);
             }
           }
-          const candScore = Math.max(archDynScore, Number(d.total_score ?? 0));
+          const candScore = hasArchAnswers ? archDynScore : Number(d.total_score ?? 0);
           const candMs = Number(d.total_response_ms || archDynMs || 45000);
           if (
             candScore > bestScore ||
@@ -629,6 +644,15 @@ export async function PATCH(req: NextRequest) {
           ? (session.prize_structure as PrizeTier[])
           : DEFAULT_36_STRUCTURE;
 
+      const lbRowsToInsert: {
+        session_id: string;
+        user_id: string;
+        rank: number;
+        points: number;
+        response_ms: number;
+        prize: number;
+      }[] = [];
+
       for (let i = 0; i < scored.length; i++) {
         const row = scored[i];
         const rank = i + 1;
@@ -643,21 +667,19 @@ export async function PATCH(req: NextRequest) {
           })
           .eq("id", row.id);
 
-        await supabase
-          .from("leaderboards")
-          .upsert(
-            {
-              session_id: sessionId,
-              user_id: row.user_id,
-              total_score: row.calc_score,
-              total_response_ms: row.calc_ms,
-              rank,
-              prize_won: prize,
-              updated_at: new Date().toISOString(),
-            },
-            { onConflict: "session_id,user_id" }
-          )
-          .select();
+        lbRowsToInsert.push({
+          session_id: sessionId,
+          user_id: row.user_id,
+          rank,
+          points: row.calc_score,
+          response_ms: row.calc_ms,
+          prize,
+        });
+      }
+
+      await supabase.from("leaderboards").delete().eq("session_id", sessionId);
+      if (lbRowsToInsert.length > 0) {
+        await supabase.from("leaderboards").insert(lbRowsToInsert);
       }
 
       return NextResponse.json({ ok: true, updatedCount: scored.length });
