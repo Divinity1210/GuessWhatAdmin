@@ -12,6 +12,7 @@ const navItems = [
   { label: "Questions & AI Bank", href: "/admin/questions", category: "Game Operations" },
   { label: "Game Sessions", href: "/admin/sessions", category: "Game Operations" },
   { label: "Brand & Market Data", href: "/admin/insights", category: "Data Monetization" },
+  { label: "Community, Polls & Ads", href: "/admin/community", category: "Data Monetization" },
   { label: "Players", href: "/admin/players", category: "Audience" },
   { label: "Referrals & Promos", href: "/admin/referrals", category: "Audience" },
   { label: "Notifications & Inbox", href: "/admin/notifications", category: "Audience" },
@@ -97,6 +98,11 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
                       {item.href === "/admin/insights" && (
                         <span className="text-[10px] font-bold uppercase px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300">
                           CSV
+                        </span>
+                      )}
+                      {item.href === "/admin/community" && (
+                        <span className="text-[10px] font-bold uppercase px-1.5 py-0.5 rounded bg-amber-500/20 text-amber-300">
+                          ADS + POLLS
                         </span>
                       )}
                     </Link>
