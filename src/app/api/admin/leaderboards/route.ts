@@ -152,10 +152,12 @@ export async function GET(req: NextRequest) {
     // Build question and option consensus rankings for this session (live answers + archived replay answers)
     const sessionAnswers = (answers ?? []).filter((a) => a.session_id === sessionId);
     const optionPickCounts = new Map<string, number>();
+    const optionTimeMs = new Map<string, number>();
     const questionTotalPicks = new Map<string, number>();
 
     for (const a of sessionAnswers) {
       optionPickCounts.set(a.option_id, (optionPickCounts.get(a.option_id) ?? 0) + 1);
+      optionTimeMs.set(a.option_id, (optionTimeMs.get(a.option_id) ?? 0) + Number(a.response_ms ?? 0));
       questionTotalPicks.set(a.question_id, (questionTotalPicks.get(a.question_id) ?? 0) + 1);
     }
 
@@ -168,6 +170,10 @@ export async function GET(req: NextRequest) {
             optionPickCounts.set(
               ans.option_id,
               (optionPickCounts.get(ans.option_id) ?? 0) + 1
+            );
+            optionTimeMs.set(
+              ans.option_id,
+              (optionTimeMs.get(ans.option_id) ?? 0) + Number(ans.response_ms ?? 0)
             );
             questionTotalPicks.set(
               ans.question_id,
@@ -216,18 +222,18 @@ export async function GET(req: NextRequest) {
         (a: { position: number }, b: { position: number }) => a.position - b.position
       );
       const ranked = [...opts].sort((a, b) => {
-        const diff = (optionPickCounts.get(b.id) ?? 0) - (optionPickCounts.get(a.id) ?? 0);
-        return diff !== 0 ? diff : a.position - b.position;
+        const aPicks = optionPickCounts.get(a.id) ?? 0;
+        const bPicks = optionPickCounts.get(b.id) ?? 0;
+        if (bPicks !== aPicks) return bPicks - aPicks;
+        if (aPicks > 0) {
+          const timeDiff = (optionTimeMs.get(a.id) ?? 0) - (optionTimeMs.get(b.id) ?? 0);
+          if (timeDiff !== 0) return timeDiff;
+        }
+        return a.position - b.position;
       });
 
-      let currentRankIdx = 0;
       ranked.forEach((opt, idx) => {
         const picks = optionPickCounts.get(opt.id) ?? 0;
-        const prevPicks =
-          idx > 0 ? (optionPickCounts.get(ranked[idx - 1].id) ?? 0) : picks;
-        if (idx > 0 && picks < prevPicks) {
-          currentRankIdx = idx;
-        }
         const pct = totalQ > 0 ? Number(((picks / totalQ) * 100).toFixed(1)) : 0;
         optionConsensus.set(opt.id, {
           optionId: opt.id,
@@ -235,8 +241,8 @@ export async function GET(req: NextRequest) {
           questionId: q.id,
           picks,
           percentage: pct,
-          consensusRank: currentRankIdx + 1,
-          pointsAwarded: picks > 0 ? Math.max(10 - currentRankIdx, 1) : 1,
+          consensusRank: idx + 1,
+          pointsAwarded: Math.max(10 - idx, 1),
         });
       });
     }
@@ -548,8 +554,10 @@ export async function PATCH(req: NextRequest) {
       });
 
       const optionPicks = new Map<string, number>();
+      const optionTime = new Map<string, number>();
       for (const a of answers ?? []) {
         optionPicks.set(a.option_id, (optionPicks.get(a.option_id) ?? 0) + 1);
+        optionTime.set(a.option_id, (optionTime.get(a.option_id) ?? 0) + Number(a.response_ms ?? 0));
       }
       for (const l of sessionArchived) {
         const d = (l.detail ?? {}) as ArchivedAttemptDetail;
@@ -557,6 +565,7 @@ export async function PATCH(req: NextRequest) {
           for (const ans of d.answers) {
             if (ans.option_id) {
               optionPicks.set(ans.option_id, (optionPicks.get(ans.option_id) ?? 0) + 1);
+              optionTime.set(ans.option_id, (optionTime.get(ans.option_id) ?? 0) + Number(ans.response_ms ?? 0));
             }
           }
         }
@@ -568,18 +577,17 @@ export async function PATCH(req: NextRequest) {
           (a: { position: number }, b: { position: number }) => a.position - b.position
         );
         const ranked = [...opts].sort((a, b) => {
-          const diff = (optionPicks.get(b.id) ?? 0) - (optionPicks.get(a.id) ?? 0);
-          return diff !== 0 ? diff : a.position - b.position;
-        });
-        let currentRankIdx = 0;
-        ranked.forEach((opt, idx) => {
-          const picks = optionPicks.get(opt.id) ?? 0;
-          const prevPicks =
-            idx > 0 ? (optionPicks.get(ranked[idx - 1].id) ?? 0) : picks;
-          if (idx > 0 && picks < prevPicks) {
-            currentRankIdx = idx;
+          const aPicks = optionPicks.get(a.id) ?? 0;
+          const bPicks = optionPicks.get(b.id) ?? 0;
+          if (bPicks !== aPicks) return bPicks - aPicks;
+          if (aPicks > 0) {
+            const timeDiff = (optionTime.get(a.id) ?? 0) - (optionTime.get(b.id) ?? 0);
+            if (timeDiff !== 0) return timeDiff;
           }
-          optionPts.set(opt.id, picks > 0 ? Math.max(10 - currentRankIdx, 1) : 1);
+          return a.position - b.position;
+        });
+        ranked.forEach((opt, idx) => {
+          optionPts.set(opt.id, Math.max(10 - idx, 1));
         });
       }
 

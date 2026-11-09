@@ -265,8 +265,10 @@ async function scoreAndPublishSession(sessionId: string) {
   if (!session) return;
 
   const optionCount = new Map<string, number>();
+  const optionTime = new Map<string, number>();
   for (const a of answers ?? []) {
     optionCount.set(a.option_id, (optionCount.get(a.option_id) ?? 0) + 1);
+    optionTime.set(a.option_id, (optionTime.get(a.option_id) ?? 0) + Number(a.response_ms ?? 0));
   }
   for (const log of archivedLogs ?? []) {
     const detail = (log.detail ?? {}) as {
@@ -276,6 +278,7 @@ async function scoreAndPublishSession(sessionId: string) {
     for (const a of detail.answers ?? []) {
       if (a.option_id) {
         optionCount.set(a.option_id, (optionCount.get(a.option_id) ?? 0) + 1);
+        optionTime.set(a.option_id, (optionTime.get(a.option_id) ?? 0) + Number(a.response_ms ?? 0));
       }
     }
   }
@@ -286,18 +289,17 @@ async function scoreAndPublishSession(sessionId: string) {
       (a: { position: number }, b: { position: number }) => a.position - b.position
     );
     const ranked = [...opts].sort((a, b) => {
-      const diff = (optionCount.get(b.id) ?? 0) - (optionCount.get(a.id) ?? 0);
-      return diff !== 0 ? diff : a.position - b.position;
-    });
-    let currentRankIdx = 0;
-    ranked.forEach((opt, idx) => {
-      const count = optionCount.get(opt.id) ?? 0;
-      const prevCount =
-        idx > 0 ? (optionCount.get(ranked[idx - 1].id) ?? 0) : count;
-      if (idx > 0 && count < prevCount) {
-        currentRankIdx = idx;
+      const aCount = optionCount.get(a.id) ?? 0;
+      const bCount = optionCount.get(b.id) ?? 0;
+      if (bCount !== aCount) return bCount - aCount;
+      if (aCount > 0) {
+        const timeDiff = (optionTime.get(a.id) ?? 0) - (optionTime.get(b.id) ?? 0);
+        if (timeDiff !== 0) return timeDiff;
       }
-      optionPoints.set(opt.id, count > 0 ? Math.max(10 - currentRankIdx, 1) : 1);
+      return a.position - b.position;
+    });
+    ranked.forEach((opt, idx) => {
+      optionPoints.set(opt.id, Math.max(10 - idx, 1));
     });
   }
 

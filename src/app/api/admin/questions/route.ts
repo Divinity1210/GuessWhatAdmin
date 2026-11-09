@@ -83,24 +83,23 @@ export async function GET(req: NextRequest) {
         (a: { position: number }, b: { position: number }) => a.position - b.position
       );
 
-      // Rank options by guesses DESC, tie-broken by position ASC
+      // Rank options by guesses DESC; if there is a draw, fastest time gets more points
       const ranked = [...rawOpts].sort((a, b) => {
-        const diff = (countByOption.get(b.id) ?? 0) - (countByOption.get(a.id) ?? 0);
-        return diff !== 0 ? diff : a.position - b.position;
+        const aCount = countByOption.get(a.id) ?? 0;
+        const bCount = countByOption.get(b.id) ?? 0;
+        if (bCount !== aCount) return bCount - aCount;
+        if (aCount > 0) {
+          const timeDiff = (timeByOption.get(a.id) ?? 0) - (timeByOption.get(b.id) ?? 0);
+          if (timeDiff !== 0) return timeDiff;
+        }
+        return a.position - b.position;
       });
 
       const pointsByOption = new Map<string, number>();
       const rankByOption = new Map<string, number>();
-      let currentRankIdx = 0;
       ranked.forEach((opt, idx) => {
-        const guesses = countByOption.get(opt.id) ?? 0;
-        const prevGuesses =
-          idx > 0 ? (countByOption.get(ranked[idx - 1].id) ?? 0) : guesses;
-        if (idx > 0 && guesses < prevGuesses) {
-          currentRankIdx = idx;
-        }
-        pointsByOption.set(opt.id, guesses > 0 ? Math.max(10 - currentRankIdx, 1) : 1);
-        rankByOption.set(opt.id, currentRankIdx + 1);
+        pointsByOption.set(opt.id, Math.max(10 - idx, 1));
+        rankByOption.set(opt.id, idx + 1);
       });
 
       const totalQuestionGuesses = rawOpts.reduce(
