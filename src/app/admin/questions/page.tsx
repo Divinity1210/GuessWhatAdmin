@@ -101,11 +101,72 @@ function formatFilenameToLabel(filename: string): string {
     .slice(0, 24);
 }
 
+const OPTION_TEMPLATE_SIZE_PX = 800;
+
 /**
- * Compress & resize image file on client before uploading to Supabase Storage
- * so even 10MB camera photos upload in <300ms.
+ * Normalize every 10-option picture upload into the standardized 800 x 800 px (1:1 Square)
+ * template via centered cover-crop + WebP compression (with JPEG fallback).
  */
-async function compressImageFile(file: File, maxWidth = 720, quality = 0.84): Promise<Blob> {
+async function normalizeSquareOptionImage(
+  file: File,
+  targetSize = OPTION_TEMPLATE_SIZE_PX,
+  quality = 0.86
+): Promise<Blob> {
+  if (typeof window === "undefined" || file.type === "image/gif") {
+    return file;
+  }
+  return new Promise((resolve) => {
+    const img = new Image();
+    const objectUrl = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(objectUrl);
+      const side = Math.max(1, Math.min(img.width, img.height));
+      const sx = Math.round((img.width - side) / 2);
+      const sy = Math.round((img.height - side) / 2);
+
+      const canvas = document.createElement("canvas");
+      canvas.width = targetSize;
+      canvas.height = targetSize;
+      const ctx = canvas.getContext("2d");
+      if (!ctx) {
+        resolve(file);
+        return;
+      }
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = "high";
+      ctx.drawImage(img, sx, sy, side, side, 0, 0, targetSize, targetSize);
+      canvas.toBlob(
+        (webpBlob) => {
+          if (webpBlob) {
+            resolve(webpBlob);
+            return;
+          }
+          canvas.toBlob(
+            (jpegBlob) => resolve(jpegBlob || file),
+            "image/jpeg",
+            quality
+          );
+        },
+        "image/webp",
+        quality
+      );
+    };
+    img.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      resolve(file);
+    };
+    img.src = objectUrl;
+  });
+}
+
+/**
+ * Compress optional Question Header Banner while preserving its natural aspect ratio.
+ */
+async function compressBannerImage(
+  file: File,
+  maxWidth = 1200,
+  quality = 0.85
+): Promise<Blob> {
   if (typeof window === "undefined" || file.type === "image/gif") {
     return file;
   }
@@ -127,12 +188,22 @@ async function compressImageFile(file: File, maxWidth = 720, quality = 0.84): Pr
         resolve(file);
         return;
       }
+      ctx.imageSmoothingEnabled = true;
+      ctx.imageSmoothingQuality = "high";
       ctx.drawImage(img, 0, 0, width, height);
       canvas.toBlob(
-        (blob) => {
-          resolve(blob || file);
+        (webpBlob) => {
+          if (webpBlob) {
+            resolve(webpBlob);
+            return;
+          }
+          canvas.toBlob(
+            (jpegBlob) => resolve(jpegBlob || file),
+            "image/jpeg",
+            quality
+          );
         },
-        "image/jpeg",
+        "image/webp",
         quality
       );
     };
@@ -146,12 +217,19 @@ async function compressImageFile(file: File, maxWidth = 720, quality = 0.84): Pr
 
 async function uploadImageToStorage(
   file: File,
-  extra?: { optionId?: string; questionId?: string }
+  extra?: { optionId?: string; questionId?: string; mode?: "option" | "banner" }
 ): Promise<string> {
-  const compressed = await compressImageFile(file);
+  const mode = extra?.mode ?? "option";
+  const processed =
+    mode === "banner"
+      ? await compressBannerImage(file)
+      : await normalizeSquareOptionImage(file);
+  const mimeType = processed.type || file.type || "image/webp";
+  const ext = mimeType === "image/webp" ? "webp" : mimeType === "image/png" ? "png" : "jpg";
+  const baseName = (file.name || "option").replace(/\.[^/.]+$/, "");
   const formData = new FormData();
-  const safeFile = new File([compressed], file.name || "option.jpg", {
-    type: compressed.type || file.type || "image/jpeg",
+  const safeFile = new File([processed], `${baseName}.${ext}`, {
+    type: mimeType,
   });
   formData.append("file", safeFile);
   if (extra?.optionId) formData.append("optionId", extra.optionId);
@@ -168,7 +246,7 @@ async function uploadImageToStorage(
   return data.url as string;
 }
 
-// Curated 10-option Nigerian & Global Crowd Templates (Picture + Text Templates from Product Doc Pages 11–15 & 30)
+// Curated 10-option Nigerian & Global Crowd Templates (Picture + Text Templates from Product Doc Pages 11 to 15 & 30)
 const AI_QUESTION_TEMPLATES: {
   key: string;
   category: string;
@@ -182,16 +260,16 @@ const AI_QUESTION_TEMPLATES: {
     title: "Which food will be selected the most?",
     type: "image",
     options: [
-      { label: "Jollof Rice", media_url: "https://images.unsplash.com/photo-1604329760661-e71dc83f8f26?auto=format&fit=crop&w=500&q=80" },
-      { label: "Egusi & Pounded Yam", media_url: "https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=500&q=80" },
-      { label: "Amala & Ewedu", media_url: "https://images.unsplash.com/photo-1512621776951-a57141f2eefd?auto=format&fit=crop&w=500&q=80" },
-      { label: "Okra & Eba", media_url: "https://images.unsplash.com/photo-1547592180-85f173990554?auto=format&fit=crop&w=500&q=80" },
-      { label: "Abula", media_url: "https://images.unsplash.com/photo-1565299624946-b28f40a0ae38?auto=format&fit=crop&w=500&q=80" },
-      { label: "Ofada Rice", media_url: "https://images.unsplash.com/photo-1536304993881-ff6e9eefa2a6?auto=format&fit=crop&w=500&q=80" },
-      { label: "Edikang Ikong", media_url: "https://images.unsplash.com/photo-1540420773420-3366772f4999?auto=format&fit=crop&w=500&q=80" },
-      { label: "Rice & Stew", media_url: "https://images.unsplash.com/photo-1516684732162-798a0062be99?auto=format&fit=crop&w=500&q=80" },
-      { label: "Beans & Plantain", media_url: "https://images.unsplash.com/photo-1585937421612-70a008356fbe?auto=format&fit=crop&w=500&q=80" },
-      { label: "Bole & Fish", media_url: "https://images.unsplash.com/photo-1555939594-58d7cb561ad1?auto=format&fit=crop&w=500&q=80" },
+      { label: "Jollof Rice", media_url: "https://images.unsplash.com/photo-1604329760661-e71dc83f8f26?auto=format&fit=crop&w=800&h=800&q=80" },
+      { label: "Egusi & Pounded Yam", media_url: "https://images.unsplash.com/photo-1546069901-ba9599a7e63c?auto=format&fit=crop&w=800&h=800&q=80" },
+      { label: "Amala & Ewedu", media_url: "https://images.unsplash.com/photo-1512621776951-a57141f2eefd?auto=format&fit=crop&w=800&h=800&q=80" },
+      { label: "Okra & Eba", media_url: "https://images.unsplash.com/photo-1547592180-85f173990554?auto=format&fit=crop&w=800&h=800&q=80" },
+      { label: "Abula", media_url: "https://images.unsplash.com/photo-1565299624946-b28f40a0ae38?auto=format&fit=crop&w=800&h=800&q=80" },
+      { label: "Ofada Rice", media_url: "https://images.unsplash.com/photo-1536304993881-ff6e9eefa2a6?auto=format&fit=crop&w=800&h=800&q=80" },
+      { label: "Edikang Ikong", media_url: "https://images.unsplash.com/photo-1540420773420-3366772f4999?auto=format&fit=crop&w=800&h=800&q=80" },
+      { label: "Rice & Stew", media_url: "https://images.unsplash.com/photo-1516684732162-798a0062be99?auto=format&fit=crop&w=800&h=800&q=80" },
+      { label: "Beans & Plantain", media_url: "https://images.unsplash.com/photo-1585937421612-70a008356fbe?auto=format&fit=crop&w=800&h=800&q=80" },
+      { label: "Bole & Fish", media_url: "https://images.unsplash.com/photo-1555939594-58d7cb561ad1?auto=format&fit=crop&w=800&h=800&q=80" },
     ],
   },
   {
@@ -200,16 +278,16 @@ const AI_QUESTION_TEMPLATES: {
     title: "Which car will be selected the most?",
     type: "image",
     options: [
-      { label: "Range Rover", media_url: "https://images.unsplash.com/photo-1563720223185-11003d516935?auto=format&fit=crop&w=500&q=80" },
-      { label: "Bugatti", media_url: "https://images.unsplash.com/photo-1566008885218-90abf9200ddb?auto=format&fit=crop&w=500&q=80" },
-      { label: "Tesla", media_url: "https://images.unsplash.com/photo-1560958089-b8a1929cea89?auto=format&fit=crop&w=500&q=80" },
-      { label: "BMW", media_url: "https://images.unsplash.com/photo-1555215695-3004980ad54e?auto=format&fit=crop&w=500&q=80" },
-      { label: "Mustang", media_url: "https://images.unsplash.com/photo-1584345604476-8ec5e12e42dd?auto=format&fit=crop&w=500&q=80" },
-      { label: "G-Wagon", media_url: "https://images.unsplash.com/photo-1520031441872-265e4ff70366?auto=format&fit=crop&w=500&q=80" },
-      { label: "Rolls-Royce", media_url: "https://images.unsplash.com/photo-1631295868223-63265b40d9e4?auto=format&fit=crop&w=500&q=80" },
-      { label: "Ferrari", media_url: "https://images.unsplash.com/photo-1583121274602-3e2820c69888?auto=format&fit=crop&w=500&q=80" },
-      { label: "Lamborghini", media_url: "https://images.unsplash.com/photo-1544829099-b9a0c07fad1a?auto=format&fit=crop&w=500&q=80" },
-      { label: "McLaren", media_url: "https://images.unsplash.com/photo-1621135802920-133df287f89c?auto=format&fit=crop&w=500&q=80" },
+      { label: "Range Rover", media_url: "https://images.unsplash.com/photo-1563720223185-11003d516935?auto=format&fit=crop&w=800&h=800&q=80" },
+      { label: "Bugatti", media_url: "https://images.unsplash.com/photo-1566008885218-90abf9200ddb?auto=format&fit=crop&w=800&h=800&q=80" },
+      { label: "Tesla", media_url: "https://images.unsplash.com/photo-1560958089-b8a1929cea89?auto=format&fit=crop&w=800&h=800&q=80" },
+      { label: "BMW", media_url: "https://images.unsplash.com/photo-1555215695-3004980ad54e?auto=format&fit=crop&w=800&h=800&q=80" },
+      { label: "Mustang", media_url: "https://images.unsplash.com/photo-1584345604476-8ec5e12e42dd?auto=format&fit=crop&w=800&h=800&q=80" },
+      { label: "G-Wagon", media_url: "https://images.unsplash.com/photo-1520031441872-265e4ff70366?auto=format&fit=crop&w=800&h=800&q=80" },
+      { label: "Rolls-Royce", media_url: "https://images.unsplash.com/photo-1631295868223-63265b40d9e4?auto=format&fit=crop&w=800&h=800&q=80" },
+      { label: "Ferrari", media_url: "https://images.unsplash.com/photo-1583121274602-3e2820c69888?auto=format&fit=crop&w=800&h=800&q=80" },
+      { label: "Lamborghini", media_url: "https://images.unsplash.com/photo-1544829099-b9a0c07fad1a?auto=format&fit=crop&w=800&h=800&q=80" },
+      { label: "McLaren", media_url: "https://images.unsplash.com/photo-1621135802920-133df287f89c?auto=format&fit=crop&w=800&h=800&q=80" },
     ],
   },
   {
@@ -218,16 +296,16 @@ const AI_QUESTION_TEMPLATES: {
     title: "Which car will be selected the least?",
     type: "image",
     options: [
-      { label: "Range Rover", media_url: "https://images.unsplash.com/photo-1563720223185-11003d516935?auto=format&fit=crop&w=500&q=80" },
-      { label: "Bugatti", media_url: "https://images.unsplash.com/photo-1566008885218-90abf9200ddb?auto=format&fit=crop&w=500&q=80" },
-      { label: "Tesla", media_url: "https://images.unsplash.com/photo-1560958089-b8a1929cea89?auto=format&fit=crop&w=500&q=80" },
-      { label: "BMW", media_url: "https://images.unsplash.com/photo-1555215695-3004980ad54e?auto=format&fit=crop&w=500&q=80" },
-      { label: "Mustang", media_url: "https://images.unsplash.com/photo-1584345604476-8ec5e12e42dd?auto=format&fit=crop&w=500&q=80" },
-      { label: "G-Wagon", media_url: "https://images.unsplash.com/photo-1520031441872-265e4ff70366?auto=format&fit=crop&w=500&q=80" },
-      { label: "Rolls-Royce", media_url: "https://images.unsplash.com/photo-1631295868223-63265b40d9e4?auto=format&fit=crop&w=500&q=80" },
-      { label: "Ferrari", media_url: "https://images.unsplash.com/photo-1583121274602-3e2820c69888?auto=format&fit=crop&w=500&q=80" },
-      { label: "Lamborghini", media_url: "https://images.unsplash.com/photo-1544829099-b9a0c07fad1a?auto=format&fit=crop&w=500&q=80" },
-      { label: "McLaren", media_url: "https://images.unsplash.com/photo-1621135802920-133df287f89c?auto=format&fit=crop&w=500&q=80" },
+      { label: "Range Rover", media_url: "https://images.unsplash.com/photo-1563720223185-11003d516935?auto=format&fit=crop&w=800&h=800&q=80" },
+      { label: "Bugatti", media_url: "https://images.unsplash.com/photo-1566008885218-90abf9200ddb?auto=format&fit=crop&w=800&h=800&q=80" },
+      { label: "Tesla", media_url: "https://images.unsplash.com/photo-1560958089-b8a1929cea89?auto=format&fit=crop&w=800&h=800&q=80" },
+      { label: "BMW", media_url: "https://images.unsplash.com/photo-1555215695-3004980ad54e?auto=format&fit=crop&w=800&h=800&q=80" },
+      { label: "Mustang", media_url: "https://images.unsplash.com/photo-1584345604476-8ec5e12e42dd?auto=format&fit=crop&w=800&h=800&q=80" },
+      { label: "G-Wagon", media_url: "https://images.unsplash.com/photo-1520031441872-265e4ff70366?auto=format&fit=crop&w=800&h=800&q=80" },
+      { label: "Rolls-Royce", media_url: "https://images.unsplash.com/photo-1631295868223-63265b40d9e4?auto=format&fit=crop&w=800&h=800&q=80" },
+      { label: "Ferrari", media_url: "https://images.unsplash.com/photo-1583121274602-3e2820c69888?auto=format&fit=crop&w=800&h=800&q=80" },
+      { label: "Lamborghini", media_url: "https://images.unsplash.com/photo-1544829099-b9a0c07fad1a?auto=format&fit=crop&w=800&h=800&q=80" },
+      { label: "McLaren", media_url: "https://images.unsplash.com/photo-1621135802920-133df287f89c?auto=format&fit=crop&w=800&h=800&q=80" },
     ],
   },
   {
@@ -236,16 +314,16 @@ const AI_QUESTION_TEMPLATES: {
     title: "Which fruit will be selected the most?",
     type: "image",
     options: [
-      { label: "Banana", media_url: "https://images.unsplash.com/photo-1571771894821-ce9b6c11b08e?auto=format&fit=crop&w=500&q=80" },
-      { label: "Mango", media_url: "https://images.unsplash.com/photo-1553279768-865429fa0078?auto=format&fit=crop&w=500&q=80" },
-      { label: "Pawpaw", media_url: "https://images.unsplash.com/photo-1517282009859-f000ec3b26fe?auto=format&fit=crop&w=500&q=80" },
-      { label: "Orange", media_url: "https://images.unsplash.com/photo-1547514701-42782101795e?auto=format&fit=crop&w=500&q=80" },
-      { label: "Pear", media_url: "https://images.unsplash.com/photo-1514756331096-242fdeb70d4a?auto=format&fit=crop&w=500&q=80" },
-      { label: "Apple", media_url: "https://images.unsplash.com/photo-1560806887-1e4cd0b6cbd6?auto=format&fit=crop&w=500&q=80" },
-      { label: "Pineapple", media_url: "https://images.unsplash.com/photo-1550258987-190a2d41a8ba?auto=format&fit=crop&w=500&q=80" },
-      { label: "Coconut", media_url: "https://images.unsplash.com/photo-1580984969071-a8da5656c2fb?auto=format&fit=crop&w=500&q=80" },
-      { label: "Watermelon", media_url: "https://images.unsplash.com/photo-1587049352846-4a222e784d38?auto=format&fit=crop&w=500&q=80" },
-      { label: "Tangerine", media_url: "https://images.unsplash.com/photo-1611080626919-7cf5a9dbab5b?auto=format&fit=crop&w=500&q=80" },
+      { label: "Banana", media_url: "https://images.unsplash.com/photo-1571771894821-ce9b6c11b08e?auto=format&fit=crop&w=800&h=800&q=80" },
+      { label: "Mango", media_url: "https://images.unsplash.com/photo-1553279768-865429fa0078?auto=format&fit=crop&w=800&h=800&q=80" },
+      { label: "Pawpaw", media_url: "https://images.unsplash.com/photo-1517282009859-f000ec3b26fe?auto=format&fit=crop&w=800&h=800&q=80" },
+      { label: "Orange", media_url: "https://images.unsplash.com/photo-1547514701-42782101795e?auto=format&fit=crop&w=800&h=800&q=80" },
+      { label: "Pear", media_url: "https://images.unsplash.com/photo-1514756331096-242fdeb70d4a?auto=format&fit=crop&w=800&h=800&q=80" },
+      { label: "Apple", media_url: "https://images.unsplash.com/photo-1560806887-1e4cd0b6cbd6?auto=format&fit=crop&w=800&h=800&q=80" },
+      { label: "Pineapple", media_url: "https://images.unsplash.com/photo-1550258987-190a2d41a8ba?auto=format&fit=crop&w=800&h=800&q=80" },
+      { label: "Coconut", media_url: "https://images.unsplash.com/photo-1580984969071-a8da5656c2fb?auto=format&fit=crop&w=800&h=800&q=80" },
+      { label: "Watermelon", media_url: "https://images.unsplash.com/photo-1587049352846-4a222e784d38?auto=format&fit=crop&w=800&h=800&q=80" },
+      { label: "Tangerine", media_url: "https://images.unsplash.com/photo-1611080626919-7cf5a9dbab5b?auto=format&fit=crop&w=800&h=800&q=80" },
     ],
   },
   {
@@ -254,16 +332,16 @@ const AI_QUESTION_TEMPLATES: {
     title: "Which snack will be selected the most?",
     type: "image",
     options: [
-      { label: "Suya", media_url: "https://images.unsplash.com/photo-1544025162-d76694265947?auto=format&fit=crop&w=500&q=80" },
-      { label: "Kilishi", media_url: "https://images.unsplash.com/photo-1558030006-450675393462?auto=format&fit=crop&w=500&q=80" },
-      { label: "Pizza", media_url: "https://images.unsplash.com/photo-1513104890138-7c749659a591?auto=format&fit=crop&w=500&q=80" },
-      { label: "Small Chops", media_url: "https://images.unsplash.com/photo-1541592106381-b31e9677c0e5?auto=format&fit=crop&w=500&q=80" },
-      { label: "Popcorn", media_url: "https://images.unsplash.com/photo-1578849278619-e73505e9610f?auto=format&fit=crop&w=500&q=80" },
-      { label: "Fried Yam", media_url: "https://images.unsplash.com/photo-1573080496219-bb080dd4f877?auto=format&fit=crop&w=500&q=80" },
-      { label: "Plantain Chips", media_url: "https://images.unsplash.com/photo-1566478989037-eec170784d0b?auto=format&fit=crop&w=500&q=80" },
-      { label: "Cashew Nuts", media_url: "https://images.unsplash.com/photo-1509358271058-acd22cc93898?auto=format&fit=crop&w=500&q=80" },
-      { label: "Groundnut", media_url: "https://images.unsplash.com/photo-1567892737950-30c4db37cd89?auto=format&fit=crop&w=500&q=80" },
-      { label: "Meat Pie", media_url: "https://images.unsplash.com/photo-1509440159596-0249088772ff?auto=format&fit=crop&w=500&q=80" },
+      { label: "Suya", media_url: "https://images.unsplash.com/photo-1544025162-d76694265947?auto=format&fit=crop&w=800&h=800&q=80" },
+      { label: "Kilishi", media_url: "https://images.unsplash.com/photo-1558030006-450675393462?auto=format&fit=crop&w=800&h=800&q=80" },
+      { label: "Pizza", media_url: "https://images.unsplash.com/photo-1513104890138-7c749659a591?auto=format&fit=crop&w=800&h=800&q=80" },
+      { label: "Small Chops", media_url: "https://images.unsplash.com/photo-1541592106381-b31e9677c0e5?auto=format&fit=crop&w=800&h=800&q=80" },
+      { label: "Popcorn", media_url: "https://images.unsplash.com/photo-1578849278619-e73505e9610f?auto=format&fit=crop&w=800&h=800&q=80" },
+      { label: "Fried Yam", media_url: "https://images.unsplash.com/photo-1573080496219-bb080dd4f877?auto=format&fit=crop&w=800&h=800&q=80" },
+      { label: "Plantain Chips", media_url: "https://images.unsplash.com/photo-1566478989037-eec170784d0b?auto=format&fit=crop&w=800&h=800&q=80" },
+      { label: "Cashew Nuts", media_url: "https://images.unsplash.com/photo-1509358271058-acd22cc93898?auto=format&fit=crop&w=800&h=800&q=80" },
+      { label: "Groundnut", media_url: "https://images.unsplash.com/photo-1567892737950-30c4db37cd89?auto=format&fit=crop&w=800&h=800&q=80" },
+      { label: "Meat Pie", media_url: "https://images.unsplash.com/photo-1509440159596-0249088772ff?auto=format&fit=crop&w=800&h=800&q=80" },
     ],
   },
   {
@@ -696,7 +774,7 @@ export default function QuestionsPage() {
     const slotKey = `banner-${mode}`;
     setUploadingSlot((p) => ({ ...p, [slotKey]: true }));
     try {
-      const uploadedUrl = await uploadImageToStorage(file);
+      const uploadedUrl = await uploadImageToStorage(file, { mode: "banner" });
       if (mode === "create") {
         setQuestionBannerUrl(uploadedUrl);
       } else {
@@ -917,13 +995,13 @@ export default function QuestionsPage() {
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
         <div>
           <span className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-amber-500/10 border border-amber-500/20 text-xs font-semibold text-amber-300 mb-2">
-            Pages 11–15, 26, 30, 34, 36 · Picture &amp; Text Question Bank
+            Pages 11 to 15, 26, 30, 34, 36 · Picture &amp; Text Question Bank
           </span>
           <h1 className="text-3xl font-extrabold text-white tracking-tight">
             Question Management &amp; Picture Question Studio
           </h1>
           <p className="text-slate-400 text-sm mt-1">
-            Create, upload images directly from your device, preview, and publish 10-option crowd questions across Picture, Text, Number, and Colour formats.
+            Create, upload 1:1 square images (800 x 800 px), preview, and publish 10-option crowd questions across Picture, Text, Number, and Colour formats.
           </p>
         </div>
 
@@ -934,7 +1012,7 @@ export default function QuestionsPage() {
               setShowAIGenerator(!showAIGenerator);
               setShowCreate(false);
             }}
-            className="inline-flex items-center gap-2 px-4 py-3 rounded-2xl bg-indigo-500/20 hover:bg-indigo-500/30 border border-indigo-500/40 text-indigo-200 font-bold text-xs sm:text-sm transition-all"
+            className="inline-flex items-center gap-2 px-4 py-3 rounded-2xl bg-sky-500/15 hover:bg-sky-500/25 border border-sky-500/35 text-sky-200 font-bold text-xs sm:text-sm transition-all"
           >
             <span>✦ Question Bank Templates (Picture &amp; Text)</span>
           </button>
@@ -975,25 +1053,30 @@ export default function QuestionsPage() {
       {/* Architecture Explanation Banner */}
       <div className="rounded-2xl p-4 bg-[#0f1219] border border-white/10 flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div className="space-y-1">
-          <p className="text-xs font-bold uppercase tracking-wider text-amber-400">
-            Picture &amp; Text Crowd Questions (Direct Image Upload Enabled)
-          </p>
+          <div className="flex flex-wrap items-center gap-2">
+            <p className="text-xs font-bold uppercase tracking-wider text-amber-400">
+              Standardized 1:1 Square Picture Template (800 x 800 px)
+            </p>
+            <span className="rounded-full bg-emerald-500/15 border border-emerald-500/30 px-2.5 py-0.5 font-mono text-[11px] font-bold text-emerald-300">
+              Auto-Square Crop Enabled
+            </span>
+          </div>
           <p className="text-xs text-slate-300 leading-relaxed">
-            Upload photos directly from your computer or phone for any question or its <strong>10 options</strong> (stored in Supabase Storage). Click <strong>📷 + Create Picture Question</strong> above, or click <strong>📷 Upload Photo</strong> on any option card below to add or change pictures immediately.
+            Option pictures render in a <strong>1:1 Square</strong> frame on both Mobile (2x5) and Desktop (5x2). Prepare option images at <strong>800 x 800 px</strong> (or any square size); non-square uploads are automatically center-cropped to <strong>800 x 800 px WebP</strong> on upload.
           </p>
         </div>
         <div className="flex items-center gap-3 shrink-0 text-xs">
           <div className="px-3 py-2 rounded-xl bg-emerald-500/10 border border-emerald-500/30 text-center">
-            <p className="text-[10px] uppercase text-emerald-300 font-semibold">Picture Qs</p>
-            <p className="text-base font-black text-emerald-400">{pictureQuestionCount}</p>
+            <p className="text-[10px] uppercase text-emerald-300 font-semibold">Template</p>
+            <p className="text-base font-black text-emerald-400 font-mono">800×800</p>
+          </div>
+          <div className="px-3 py-2 rounded-xl bg-white/[0.03] border border-white/10 text-center">
+            <p className="text-[10px] uppercase text-slate-400 font-semibold">Picture Qs</p>
+            <p className="text-base font-black text-white">{pictureQuestionCount}</p>
           </div>
           <div className="px-3 py-2 rounded-xl bg-white/[0.03] border border-white/10 text-center">
             <p className="text-[10px] uppercase text-slate-400 font-semibold">Bank Total</p>
-            <p className="text-base font-black text-white">{questions.length}</p>
-          </div>
-          <div className="px-3 py-2 rounded-xl bg-white/[0.03] border border-white/10 text-center">
-            <p className="text-[10px] uppercase text-slate-400 font-semibold">Per Session</p>
-            <p className="text-base font-black text-amber-400">10 Qs</p>
+            <p className="text-base font-black text-amber-400">{questions.length}</p>
           </div>
         </div>
       </div>
@@ -1045,14 +1128,14 @@ export default function QuestionsPage() {
                 onClick={() => setSelectedSessionId(s.id)}
                 className={`px-3.5 py-2 rounded-xl text-xs font-bold shrink-0 transition-all flex items-center gap-2 ${
                   active
-                    ? "bg-indigo-500 text-white shadow-lg shadow-indigo-500/25"
+                    ? "bg-sky-500 text-slate-950 shadow-lg shadow-sky-500/25"
                     : "bg-white/[0.03] text-slate-300 hover:bg-white/[0.08] border border-white/10"
                 }`}
               >
                 <span>{s.name}</span>
                 <span
                   className={`px-1.5 py-0.5 rounded text-[10px] uppercase ${
-                    active ? "bg-black/30 text-amber-300" : "bg-white/10 text-slate-300"
+                    active ? "bg-black/25 text-white" : "bg-white/10 text-slate-300"
                   }`}
                 >
                   {s.question_count}/10 Qs · {s.status}
@@ -1065,17 +1148,17 @@ export default function QuestionsPage() {
 
       {/* AI Question Bank Generator Panel (Picture + Text Templates) */}
       {showAIGenerator && (
-        <div className="wimbf-glass rounded-3xl p-6 md:p-8 border border-indigo-500/40 space-y-5 shadow-2xl">
+        <div className="wimbf-glass rounded-3xl p-6 md:p-8 border border-sky-500/35 space-y-5 shadow-2xl">
           <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/10 pb-4">
             <div>
-              <span className="text-[11px] font-bold uppercase tracking-wider text-indigo-300">
-                Pages 11–15 &amp; 30 · Picture &amp; Text Crowd Question Bank
+              <span className="text-[11px] font-bold uppercase tracking-wider text-sky-300">
+                Pages 11 to 15 &amp; 30 · Picture &amp; Text Crowd Question Bank
               </span>
               <h2 className="text-xl font-extrabold text-white mt-0.5">
-                10-Option Question Bank Templates (Includes Picture Questions)
+                10-Option Question Bank Templates (1:1 Square Picture Presets)
               </h2>
               <p className="text-xs text-slate-400">
-                Select any Picture or Text template below to customize its 10 options (and upload your own photos) or 1-click publish to the Question Bank.
+                Select any Picture or Text template below to customize its 10 options (and upload your own 800 x 800 px photos) or 1-click publish to the Question Bank.
               </p>
             </div>
             <button
@@ -1094,7 +1177,7 @@ export default function QuestionsPage() {
                 className={`rounded-2xl p-4 bg-[#0f1219] border flex flex-col justify-between gap-3 transition-colors ${
                   tpl.type === "image"
                     ? "border-emerald-500/40 hover:border-emerald-400"
-                    : "border-white/10 hover:border-indigo-500/40"
+                    : "border-white/10 hover:border-sky-500/40"
                 }`}
               >
                 <div className="space-y-2.5">
@@ -1103,14 +1186,14 @@ export default function QuestionsPage() {
                       className={`px-2.5 py-0.5 rounded-full text-[11px] font-bold uppercase ${
                         tpl.type === "image"
                           ? "bg-emerald-500/20 text-emerald-300"
-                          : "bg-indigo-500/20 text-indigo-300"
+                          : "bg-sky-500/20 text-sky-300"
                       }`}
                     >
                       {tpl.type === "image" ? "🖼 " : ""}
                       {tpl.key}
                     </span>
                     <span className="text-[11px] text-slate-400 font-mono shrink-0">
-                      {tpl.type === "image" ? "10 Photos" : "10 Options"}
+                      {tpl.type === "image" ? "10 Photos · 1:1" : "10 Options"}
                     </span>
                   </div>
                   <p className="text-xs font-bold text-white leading-snug">{tpl.title}</p>
@@ -1127,9 +1210,9 @@ export default function QuestionsPage() {
                             src={o.media_url}
                             alt={o.label}
                             width={80}
-                            height={60}
+                            height={80}
                             loading="lazy"
-                            className="w-full h-10 object-cover"
+                            className="w-full aspect-square object-cover object-center"
                           />
                           <p className="text-[9px] text-slate-300 truncate px-1 py-0.5 text-center">
                             {o.label}
@@ -1200,7 +1283,7 @@ export default function QuestionsPage() {
                   options,
                 })
               }
-              className="px-4 py-2 rounded-xl bg-indigo-500/20 hover:bg-indigo-500/30 border border-indigo-500/40 text-indigo-200 text-xs font-bold"
+              className="px-4 py-2 rounded-xl bg-sky-500/15 hover:bg-sky-500/25 border border-sky-500/35 text-sky-200 text-xs font-bold"
             >
               👁 Preview 5×2 Player Grid
             </button>
@@ -1241,9 +1324,9 @@ export default function QuestionsPage() {
                 }
                 className="w-full rounded-xl border border-emerald-500/40 bg-[#0e121b] px-3 py-3 text-sm font-bold text-white focus:border-amber-500 focus:outline-none"
               >
-                <option value="image">🖼 Picture (10 Image Options)</option>
+                <option value="image">🖼 Picture (10 Square Options)</option>
                 <option value="text">Aa Text (10 Words)</option>
-                <option value="number">🔢 Number (0–9)</option>
+                <option value="number">🔢 Number (0 to 9)</option>
                 <option value="color">🎨 Colour (10 Circles)</option>
               </select>
             </div>
@@ -1372,16 +1455,18 @@ export default function QuestionsPage() {
             <legend className="px-2 text-xs font-bold uppercase tracking-wider text-amber-300">
               10 Answer Options{" "}
               {qType === "image"
-                ? "(Label + Direct Image Upload for Each Option)"
+                ? "(1:1 Square · 800 x 800 px Template)"
                 : qType === "color"
                 ? "(Label + Colour Picker)"
                 : "(Click 📷 Upload Photo on any option to make it a Picture Question)"}
             </legend>
 
             <div className="flex flex-wrap items-center justify-between gap-3 pb-2 border-b border-white/10">
-              <p className="text-xs text-slate-400">
-                Upload all 10 option photos at once from your device, or upload individual option photos below:
-              </p>
+              <div className="space-y-0.5">
+                <p className="text-xs text-slate-300">
+                  Recommended size: <strong className="text-emerald-300 font-mono">800 x 800 px (1:1 Square)</strong>. Non-square photos auto-crop to a centered 800 x 800 square.
+                </p>
+              </div>
               <div className="flex items-center gap-2">
                 <input
                   id="create-bulk-option-images"
@@ -1397,8 +1482,8 @@ export default function QuestionsPage() {
                 >
                   <span>
                     {uploadingSlot["create-bulk"]
-                      ? "Uploading Photos..."
-                      : "📁 Upload Up to 10 Option Pictures at Once"}
+                      ? "Normalizing & Uploading..."
+                      : "📁 Upload Up to 10 Square Option Pictures"}
                   </span>
                 </label>
               </div>
@@ -1434,13 +1519,13 @@ export default function QuestionsPage() {
                       <img
                         src={opt.media_url}
                         alt={opt.label || `Option ${i + 1}`}
-                        width={64}
-                        height={48}
-                        className="w-16 h-12 rounded-lg object-cover border border-emerald-500/40 shrink-0 bg-slate-900"
+                        width={96}
+                        height={96}
+                        className="size-12 aspect-square rounded-xl object-cover object-center border border-emerald-500/40 shrink-0 bg-slate-900"
                       />
                     ) : (
-                      <div className="w-16 h-12 rounded-lg bg-white/[0.03] border border-dashed border-white/15 flex items-center justify-center text-[10px] text-slate-500 shrink-0">
-                        No Photo
+                      <div className="size-12 aspect-square rounded-xl bg-white/[0.03] border border-dashed border-white/15 flex items-center justify-center text-[10px] text-slate-500 text-center leading-tight shrink-0">
+                        1:1
                       </div>
                     )}
 
@@ -1545,7 +1630,7 @@ export default function QuestionsPage() {
             <div>
               <div className="flex flex-wrap items-center gap-2">
                 {selectedQuestion.session_position && (
-                  <span className="px-2.5 py-0.5 rounded-full bg-indigo-500/20 border border-indigo-500/40 text-indigo-300 text-xs font-black">
+                  <span className="px-2.5 py-0.5 rounded-full bg-sky-500/20 border border-sky-500/40 text-sky-300 text-xs font-black">
                     Session Q{selectedQuestion.session_position} of 10
                   </span>
                 )}
@@ -1559,7 +1644,7 @@ export default function QuestionsPage() {
                       : "bg-white/10 text-slate-300"
                   }`}
                 >
-                  {selectedQuestion.type === "image" ? "🖼 Picture Question" : `Format: ${selectedQuestion.type}`}
+                  {selectedQuestion.type === "image" ? "🖼 Picture Question (1:1 Square)" : `Format: ${selectedQuestion.type}`}
                 </span>
                 <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 text-xs font-semibold">
                   Used in {selectedQuestion.sessions_used_count ?? 0} session(s)
@@ -1581,7 +1666,7 @@ export default function QuestionsPage() {
                     options: selectedQuestion.question_options ?? [],
                   })
                 }
-                className="px-3.5 py-2 rounded-xl bg-indigo-500/20 hover:bg-indigo-500/30 border border-indigo-500/30 text-indigo-200 text-xs font-bold"
+                className="px-3.5 py-2 rounded-xl bg-sky-500/15 hover:bg-sky-500/25 border border-sky-500/35 text-sky-200 text-xs font-bold"
               >
                 👁 Preview 5×2 Grid
               </button>
@@ -1617,9 +1702,9 @@ export default function QuestionsPage() {
 
           {/* 5x2 Visual Option Cards with Direct 1-Click Photo Upload on Every Option */}
           <div className="space-y-2.5">
-            <div className="flex items-center justify-between">
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <p className="text-xs font-bold uppercase tracking-wider text-slate-400">
-                5×2 Option Grid — Click &ldquo;📷 Upload Photo&rdquo; on any option to upload an image directly
+                5×2 Square Option Grid (800 x 800 px) · Click &ldquo;📷 Upload Photo&rdquo; on any option to upload directly
               </p>
               <button
                 type="button"
@@ -1639,15 +1724,15 @@ export default function QuestionsPage() {
                     key={opt.id}
                     className="rounded-2xl overflow-hidden bg-[#0b0e14] border border-white/10 flex flex-col justify-between"
                   >
-                    <div className="relative aspect-[4/3] w-full bg-slate-900 overflow-hidden">
+                    <div className="relative aspect-square w-full bg-slate-900 overflow-hidden">
                       {hasImg ? (
                         <img
                           src={opt.media_url!}
                           alt={opt.label}
-                          width={320}
-                          height={240}
+                          width={400}
+                          height={400}
                           loading="lazy"
-                          className="w-full h-full object-cover"
+                          className="w-full h-full object-cover object-center"
                         />
                       ) : selectedQuestion.type === "color" && opt.media_url ? (
                         <div
@@ -1657,7 +1742,7 @@ export default function QuestionsPage() {
                       ) : (
                         <div className="w-full h-full flex flex-col items-center justify-center text-slate-500 text-xs p-2 text-center">
                           <span>Option #{idx + 1}</span>
-                          <span className="text-[10px] text-slate-600">No photo yet</span>
+                          <span className="text-[10px] text-slate-600">800 x 800 px</span>
                         </div>
                       )}
                       <span className="absolute top-2 left-2 px-2 py-0.5 rounded-md bg-black/75 text-[10px] font-bold text-amber-300">
@@ -1719,7 +1804,7 @@ export default function QuestionsPage() {
                 const pct = opt.percentage ?? 0;
                 const avgSec = opt.avg_response_ms
                   ? `${(opt.avg_response_ms / 1000).toFixed(1)}s`
-                  : "—";
+                  : "-";
                 const pts = opt.points ?? 1;
                 const widthPct = Math.max(Math.round((guesses / maxGuesses) * 100), 4);
                 const isTop = pts === 10;
@@ -1739,9 +1824,9 @@ export default function QuestionsPage() {
                           src={opt.media_url!}
                           alt={opt.label}
                           width={32}
-                          height={24}
+                          height={32}
                           loading="lazy"
-                          className="w-8 h-6 rounded object-cover shrink-0 border border-white/20"
+                          className="size-8 aspect-square rounded-md object-cover object-center shrink-0 border border-white/20"
                         />
                       )}
                       <span className="truncate">{opt.label}</span>
@@ -1880,7 +1965,7 @@ export default function QuestionsPage() {
                       <td className="px-5 py-4 font-semibold text-white max-w-md">
                         <div className="flex items-center gap-2">
                           {q.session_position && (
-                            <span className="px-2 py-0.5 rounded bg-indigo-500/20 text-indigo-300 text-[11px] font-black shrink-0">
+                            <span className="px-2 py-0.5 rounded bg-sky-500/20 text-sky-300 text-[11px] font-black shrink-0">
                               Q{q.session_position}
                             </span>
                           )}
@@ -1894,9 +1979,9 @@ export default function QuestionsPage() {
                                 src={o.media_url!}
                                 alt={o.label}
                                 width={36}
-                                height={28}
+                                height={36}
                                 loading="lazy"
-                                className="w-9 h-7 rounded object-cover border border-white/15"
+                                className="size-9 aspect-square rounded-lg object-cover object-center border border-white/15"
                                 title={o.label}
                               />
                             ))}
@@ -1933,7 +2018,7 @@ export default function QuestionsPage() {
                             {q.assigned_sessions.slice(0, 2).map((as) => (
                               <span
                                 key={`${as.session_id}_${as.position}`}
-                                className="text-[10px] px-1.5 py-0.5 rounded bg-indigo-500/15 text-indigo-300"
+                                className="text-[10px] px-1.5 py-0.5 rounded bg-sky-500/15 text-sky-300"
                               >
                                 {as.session_name} (#{as.position})
                               </span>
@@ -1977,7 +2062,7 @@ export default function QuestionsPage() {
                                 options: q.question_options ?? [],
                               })
                             }
-                            className="px-2.5 py-1.5 rounded-lg bg-indigo-500/15 hover:bg-indigo-500/25 text-indigo-300 text-xs font-bold"
+                            className="px-2.5 py-1.5 rounded-lg bg-sky-500/15 hover:bg-sky-500/25 text-sky-300 text-xs font-bold"
                           >
                             Preview
                           </button>
@@ -2173,12 +2258,12 @@ export default function QuestionsPage() {
 
               <fieldset className="space-y-3 border border-white/10 rounded-2xl p-4 bg-[#0b0e14]">
                 <legend className="px-2 text-xs font-bold uppercase tracking-wider text-amber-300">
-                  10 Options (Direct Picture Upload)
+                  10 Options (1:1 Square · 800 x 800 px Template)
                 </legend>
 
                 <div className="flex flex-wrap items-center justify-between gap-2 pb-2 border-b border-white/10">
-                  <span className="text-xs text-slate-400">
-                    Select up to 10 images at once or upload individual option photos:
+                  <span className="text-xs text-slate-300">
+                    Recommended: <strong className="text-emerald-300 font-mono">800 x 800 px (1:1 Square)</strong>. Non-square uploads auto-crop to 800 x 800.
                   </span>
                   <div>
                     <input
@@ -2194,8 +2279,8 @@ export default function QuestionsPage() {
                       className="cursor-pointer inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-extrabold text-xs"
                     >
                       {uploadingSlot["edit-bulk"]
-                        ? "Uploading..."
-                        : "📁 Bulk Upload 10 Option Pictures"}
+                        ? "Normalizing..."
+                        : "📁 Bulk Upload 10 Square Pictures"}
                     </label>
                   </div>
                 </div>
@@ -2229,13 +2314,13 @@ export default function QuestionsPage() {
                           <img
                             src={opt.media_url}
                             alt={opt.label || `Option ${idx + 1}`}
-                            width={56}
-                            height={40}
-                            className="w-14 h-10 rounded-lg object-cover border border-emerald-500/40 shrink-0 bg-slate-900"
+                            width={88}
+                            height={88}
+                            className="size-11 aspect-square rounded-xl object-cover object-center border border-emerald-500/40 shrink-0 bg-slate-900"
                           />
                         ) : (
-                          <div className="w-14 h-10 rounded-lg bg-white/[0.03] border border-dashed border-white/15 flex items-center justify-center text-[9px] text-slate-500 shrink-0">
-                            No Photo
+                          <div className="size-11 aspect-square rounded-xl bg-white/[0.03] border border-dashed border-white/15 flex items-center justify-center text-[9px] text-slate-500 shrink-0">
+                            1:1
                           </div>
                         )}
 
@@ -2387,17 +2472,17 @@ export default function QuestionsPage() {
         </div>
       )}
 
-      {/* 5x2 Player Grid Preview Modal (Renders Picture Options in Medium 5x2 Grid per Pages 11–13 & 26) */}
+      {/* 5x2 Player Grid Preview Modal (Renders Picture Options in 1:1 Square 5x2 Grid per Pages 11 to 13 & 26) */}
       {previewQuestion && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 overflow-y-auto">
-          <div className="w-full max-w-3xl rounded-3xl bg-[#140d26] border border-amber-500/40 p-6 md:p-8 space-y-6 shadow-2xl">
+          <div className="w-full max-w-3xl rounded-3xl bg-[#0f1422] border border-amber-500/40 p-6 md:p-8 space-y-6 shadow-2xl">
             <div className="flex items-center justify-between border-b border-white/10 pb-4">
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
                 <span className="px-2.5 py-1 rounded-full bg-amber-500/20 text-amber-300 text-xs font-bold uppercase">
                   Player Gameplay Preview · {previewQuestion.category}
                 </span>
                 <span className="px-2.5 py-1 rounded-full bg-white/10 text-slate-300 text-xs font-semibold uppercase">
-                  5×2 Grid ({previewQuestion.type})
+                  5×2 Grid · 1:1 Square ({previewQuestion.type})
                 </span>
               </div>
               <button
@@ -2429,33 +2514,33 @@ export default function QuestionsPage() {
               )}
             </div>
 
-            {/* 5x2 Grid Representation matching Pages 6–13 of Product Document */}
+            {/* 5x2 Grid Representation matching Pages 6 to 13 of Product Document */}
             <div className="grid grid-cols-2 sm:grid-cols-5 gap-3.5">
               {previewQuestion.options.slice(0, 10).map((opt, idx) => {
                 const hasImg = isImageUrl(opt.media_url);
                 return (
                   <div
                     key={idx}
-                    className="rounded-2xl overflow-hidden bg-white/[0.06] hover:bg-amber-500/20 border border-white/15 hover:border-amber-400 transition-all flex flex-col items-center justify-between cursor-pointer"
+                    className="rounded-2xl overflow-hidden bg-[#151c2e] hover:bg-amber-500/20 border border-white/15 hover:border-amber-400 transition-all flex flex-col items-center justify-between cursor-pointer"
                   >
                     {(previewQuestion.type === "image" || hasImg) ? (
                       <>
-                        <div className="aspect-[4/3] w-full bg-slate-900 overflow-hidden">
+                        <div className="aspect-square w-full bg-[#0e1320] overflow-hidden">
                           {hasImg ? (
                             <img
                               src={opt.media_url!}
                               alt={opt.label || `Option ${idx + 1}`}
-                              width={320}
-                              height={240}
-                              className="w-full h-full object-cover"
+                              width={400}
+                              height={400}
+                              className="w-full h-full object-cover object-center"
                             />
                           ) : (
                             <div className="w-full h-full grid place-items-center text-xs text-slate-500">
-                              No Photo
+                              800 x 800
                             </div>
                           )}
                         </div>
-                        <div className="px-2.5 py-2 text-center w-full">
+                        <div className="border-t border-white/[0.06] px-2.5 py-2 text-center w-full">
                           <span className="text-xs font-bold text-white line-clamp-1">
                             {opt.label || `Option ${idx + 1}`}
                           </span>

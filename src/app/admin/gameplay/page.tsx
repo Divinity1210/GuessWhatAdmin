@@ -577,7 +577,7 @@ export default function AdminGameplayAnalyticsPage() {
               <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
                 Repeat Gameplay
               </p>
-              <p className="text-3xl font-extrabold text-purple-400 mt-1 tabular-nums">
+              <p className="text-3xl font-extrabold text-amber-400 mt-1 tabular-nums">
                 {data.repeatGameplay.totalRepeatPlays.toLocaleString()}
               </p>
               <p className="text-xs text-slate-400 mt-1">
@@ -597,7 +597,7 @@ export default function AdminGameplayAnalyticsPage() {
                 <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-white/10 pb-4">
                   <div>
                     <span className="text-[11px] font-bold uppercase tracking-wider text-amber-400">
-                      Option Selection Tracker · Percentage Share · Assigned Points (10–1)
+                      Option Selection Tracker · Percentage Share · Assigned Points (10 to 1)
                     </span>
                     <h2 className="text-xl font-bold text-white mt-0.5">
                       Question Option Selections, Percentages &amp; Live Points
@@ -723,7 +723,7 @@ export default function AdminGameplayAnalyticsPage() {
                           {formatSeconds(activeQuestion.avgResponseMs)}
                         </p>
                         <p className="text-xs text-slate-400 mt-0.5">
-                          Range: {formatSeconds(activeQuestion.fastestMs)} – {formatSeconds(activeQuestion.slowestMs)}
+                          Range: {formatSeconds(activeQuestion.fastestMs)} to {formatSeconds(activeQuestion.slowestMs)}
                         </p>
                       </div>
 
@@ -732,7 +732,7 @@ export default function AdminGameplayAnalyticsPage() {
                           ★ Most Selected Option (10 Pts)
                         </p>
                         <p className="text-lg font-extrabold text-white mt-1 truncate">
-                          {activeQuestion.mostSelected?.label ?? "—"}
+                          {activeQuestion.mostSelected?.label ?? "-"}
                         </p>
                         <p className="text-xs text-emerald-300 mt-0.5">
                           {activeQuestion.mostSelected?.selections ?? 0} picks (
@@ -746,7 +746,7 @@ export default function AdminGameplayAnalyticsPage() {
                           ▼ Least Selected Option (1 Pt)
                         </p>
                         <p className="text-lg font-extrabold text-white mt-1 truncate">
-                          {activeQuestion.leastSelected?.label ?? "—"}
+                          {activeQuestion.leastSelected?.label ?? "-"}
                         </p>
                         <p className="text-xs text-rose-300 mt-0.5">
                           {activeQuestion.leastSelected?.selections ?? 0} picks (
@@ -820,10 +820,10 @@ export default function AdminGameplayAnalyticsPage() {
                                     <img
                                       src={opt.media_url}
                                       alt={opt.label}
-                                      width={48}
-                                      height={36}
+                                      width={40}
+                                      height={40}
                                       loading="lazy"
-                                      className="w-12 h-9 rounded-lg object-cover border border-white/20 shrink-0 bg-slate-900"
+                                      className="size-10 aspect-square rounded-lg object-cover object-center border border-white/20 shrink-0 bg-slate-900"
                                     />
                                   )}
                                 <span>{opt.label}</span>
@@ -864,7 +864,7 @@ export default function AdminGameplayAnalyticsPage() {
                                 </span>
                               </td>
                               <td className="px-4 py-3 font-mono text-xs text-sky-300 tabular-nums">
-                                {opt.selections > 0 ? formatSeconds(opt.avgResponseMs) : "—"}
+                                {opt.selections > 0 ? formatSeconds(opt.avgResponseMs) : "-"}
                               </td>
                               <td className="px-4 py-3 text-right">
                                 {opt.isMostSelected ? (
@@ -1137,7 +1137,7 @@ export default function AdminGameplayAnalyticsPage() {
               {/* 3A. Compare Gameplay Activity Across Sessions */}
               <div className="rounded-2xl bg-[#0f1219] border border-white/10 p-6 space-y-4">
                 <div>
-                  <span className="text-[11px] font-bold uppercase tracking-wider text-indigo-400">
+                  <span className="text-[11px] font-bold uppercase tracking-wider text-sky-400">
                     Cross-Session Benchmarking
                   </span>
                   <h2 className="text-xl font-bold text-white">
@@ -1208,17 +1208,17 @@ export default function AdminGameplayAnalyticsPage() {
                           <td className="px-4 py-3.5 font-mono font-bold text-amber-300">
                             {s.totalPlays}
                           </td>
-                          <td className="px-4 py-3.5 font-mono text-purple-300">
+                          <td className="px-4 py-3.5 font-mono text-amber-200">
                             {s.repeatPlays} ({s.repeatRatePct}%)
                           </td>
                           <td className="px-4 py-3.5 font-mono text-slate-200">
                             {s.totalQuestionsAnswered.toLocaleString()}
                           </td>
                           <td className="px-4 py-3.5 font-mono font-bold text-white">
-                            {s.avgScore > 0 ? `${s.avgScore} pts` : "—"}
+                            {s.avgScore > 0 ? `${s.avgScore} pts` : "-"}
                           </td>
                           <td className="px-4 py-3.5 font-mono text-sky-300">
-                            {s.avgQuestionTimeMs > 0 ? formatSeconds(s.avgQuestionTimeMs) : "—"}
+                            {s.avgQuestionTimeMs > 0 ? formatSeconds(s.avgQuestionTimeMs) : "-"}
                           </td>
                           <td className="px-4 py-3.5 font-mono text-slate-300">
                             {formatDuration(s.totalTimeSpentMs)}
@@ -1234,7 +1234,7 @@ export default function AdminGameplayAnalyticsPage() {
               <div className="rounded-2xl bg-[#0f1219] border border-white/10 p-6 space-y-4">
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
                   <div>
-                    <span className="text-[11px] font-bold uppercase tracking-wider text-purple-400">
+                    <span className="text-[11px] font-bold uppercase tracking-wider text-emerald-400">
                       Retention &amp; Replay Telemetry
                     </span>
                     <h2 className="text-xl font-bold text-white">
@@ -1243,7 +1243,7 @@ export default function AdminGameplayAnalyticsPage() {
                   </div>
                   <div className="text-xs text-slate-400">
                     Repeat Player Rate:{" "}
-                    <strong className="text-purple-300">
+                    <strong className="text-emerald-300">
                       {data.repeatGameplay.repeatPlayerRatePct}%
                     </strong>{" "}
                     · Avg Plays/Player:{" "}
@@ -1298,7 +1298,7 @@ export default function AdminGameplayAnalyticsPage() {
                           </td>
                           <td className="px-4 py-3 font-mono">
                             {p.replayCount > 0 ? (
-                              <span className="px-2 py-0.5 rounded bg-purple-500/20 text-purple-300 text-xs font-bold">
+                              <span className="px-2 py-0.5 rounded bg-sky-500/20 text-sky-300 text-xs font-bold">
                                 {p.replayCount} {p.replayCount === 1 ? "replay" : "replays"}
                               </span>
                             ) : (
@@ -1420,7 +1420,7 @@ export default function AdminGameplayAnalyticsPage() {
                           <span
                             className={`px-2 py-0.5 rounded text-xs font-bold ${
                               hp.isReplay
-                                ? "bg-purple-500/20 text-purple-300"
+                                ? "bg-sky-500/20 text-sky-300"
                                 : "bg-white/5 text-slate-300"
                             }`}
                           >
@@ -1453,7 +1453,7 @@ export default function AdminGameplayAnalyticsPage() {
                           {formatSeconds(hp.totalPlayTimeMs)}
                         </td>
                         <td className="px-4 py-3 text-right font-mono text-xs text-slate-300">
-                          {hp.rank ? `#${hp.rank}` : "—"}
+                          {hp.rank ? `#${hp.rank}` : "-"}
                         </td>
                       </tr>
                     ))}
