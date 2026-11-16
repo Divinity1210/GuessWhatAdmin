@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState, useMemo } from "react";
+import { useEffect, useState, useMemo, useRef } from "react";
 import Link from "next/link";
 import {
   Users,
@@ -15,19 +15,69 @@ import {
   Power,
   Trash2,
   UserPlus,
+  RotateCcw,
+  Coins,
+  Archive,
+  X,
 } from "lucide-react";
 
-type LeaderboardRow = {
+type PrizeTier = {
+  rank_from: number;
+  rank_to: number;
+  amount: number;
+};
+
+type ReferralLeaderboardConfig = {
+  title: string;
+  enabled: boolean;
+  cycleNumber: number;
+  cycleStartedAt: string | null;
+  endsNote: string;
+  prizeTiers: PrizeTier[];
+  totalPool: number;
+  totalWinnerSpots: number;
+  updatedAt: string;
+};
+
+type ArchiveWinner = {
   rank: number;
   userId: string;
   username: string;
   fullName: string;
+  avatarUrl: string | null;
+  state: string;
+  referralCode: string;
+  verifiedReferrals: number;
+  cycleSignups: number;
+  prizeAmount: number;
+};
+
+type ReferralCycleArchive = {
+  id: string;
+  cycleNumber: number;
+  title: string;
+  startedAt: string | null;
+  endedAt: string;
+  totalPool: number;
+  winners: ArchiveWinner[];
+};
+
+type LeaderboardRow = {
+  rank: number;
+  cashRank: number | null;
+  userId: string;
+  username: string;
+  fullName: string;
+  avatarUrl: string | null;
   state: string;
   status: string;
   referralCode: string;
   totalReferrals: number;
   monthlyReferrals: number;
   activePlayingReferrals: number;
+  cycleSignups: number;
+  cycleVerifiedReferrals: number;
+  prizeAmount: number;
   conversionRatePct: number;
   suspiciousFlag: boolean;
   suspiciousReason: string | null;
@@ -48,6 +98,8 @@ type ReferralRecord = {
   referrerFullName: string;
   referralCodeUsed: string;
   createdAt: string;
+  inCurrentCycle: boolean;
+  isVerified: boolean;
   suspicious: boolean;
   suspiciousReason: string | null;
 };
@@ -68,6 +120,9 @@ type Summary = {
   activeReferredPlayers: number;
   activeReferrersCount: number;
   suspiciousClustersCount: number;
+  cycleVerifiedTotal: number;
+  cyclePool: number;
+  eligibleWinnersCount: number;
 };
 
 type BasicPlayer = {
@@ -77,6 +132,18 @@ type BasicPlayer = {
   referredBy: string | null;
 };
 
+function formatOrdinal(n: number): string {
+  const s = ["th", "st", "nd", "rd"];
+  const v = n % 100;
+  return n + (s[(v - 20) % 10] || s[v] || s[0]);
+}
+
+function formatTierRange(t: PrizeTier): string {
+  return t.rank_from === t.rank_to
+    ? formatOrdinal(t.rank_from)
+    : `${formatOrdinal(t.rank_from)} to ${formatOrdinal(t.rank_to)}`;
+}
+
 export default function ReferralsPage() {
   const [summary, setSummary] = useState<Summary>({
     totalPlayers: 0,
@@ -85,18 +152,51 @@ export default function ReferralsPage() {
     activeReferredPlayers: 0,
     activeReferrersCount: 0,
     suspiciousClustersCount: 0,
+    cycleVerifiedTotal: 0,
+    cyclePool: 135000,
+    eligibleWinnersCount: 0,
   });
+  const [config, setConfig] = useState<ReferralLeaderboardConfig>({
+    title: "Referral Cash Challenge #1",
+    enabled: true,
+    cycleNumber: 1,
+    cycleStartedAt: null,
+    endsNote: "Top verified referrers win cash prizes",
+    prizeTiers: [
+      { rank_from: 1, rank_to: 1, amount: 50000 },
+      { rank_from: 2, rank_to: 2, amount: 30000 },
+      { rank_from: 3, rank_to: 3, amount: 20000 },
+      { rank_from: 4, rank_to: 10, amount: 5000 },
+    ],
+    totalPool: 135000,
+    totalWinnerSpots: 10,
+    updatedAt: "",
+  });
+  const [archives, setArchives] = useState<ReferralCycleArchive[]>([]);
   const [leaderboard, setLeaderboard] = useState<LeaderboardRow[]>([]);
   const [referralRecords, setReferralRecords] = useState<ReferralRecord[]>([]);
   const [promoCodes, setPromoCodes] = useState<PromoCodeItem[]>([]);
   const [playersList, setPlayersList] = useState<BasicPlayer[]>([]);
   const [loading, setLoading] = useState(true);
 
-  const [activeTab, setActiveTab] = useState<"leaderboard" | "records" | "promos" | "suspicious">(
-    "leaderboard"
-  );
+  const [activeTab, setActiveTab] = useState<
+    "leaderboard" | "records" | "promos" | "suspicious" | "archives"
+  >("leaderboard");
   const [search, setSearch] = useState("");
   const [onlySuspicious, setOnlySuspicious] = useState(false);
+
+  // Prize configuration studio
+  const [showPrizeStudio, setShowPrizeStudio] = useState(false);
+  const [draftTitle, setDraftTitle] = useState("");
+  const [draftEnabled, setDraftEnabled] = useState(true);
+  const [draftEndsNote, setDraftEndsNote] = useState("");
+  const [draftTiers, setDraftTiers] = useState<PrizeTier[]>([]);
+  const [savingConfig, setSavingConfig] = useState(false);
+
+  // Reset confirmation native <dialog>
+  const resetDialogRef = useRef<HTMLDialogElement | null>(null);
+  const [nextCycleTitle, setNextCycleTitle] = useState("");
+  const [resettingCycle, setResettingCycle] = useState(false);
 
   // Promo code form
   const [promoCode, setPromoCode] = useState("");
@@ -118,6 +218,18 @@ export default function ReferralsPage() {
       const res = await fetch("/api/admin/referrals", { cache: "no-store" });
       const data = await res.json();
       if (data.summary) setSummary(data.summary);
+      if (data.config) {
+        setConfig(data.config);
+        setDraftTitle(data.config.title);
+        setDraftEnabled(Boolean(data.config.enabled));
+        setDraftEndsNote(data.config.endsNote);
+        setDraftTiers(
+          Array.isArray(data.config.prizeTiers)
+            ? data.config.prizeTiers.map((t: PrizeTier) => ({ ...t }))
+            : []
+        );
+      }
+      setArchives(data.archives ?? []);
       setLeaderboard(data.leaderboard ?? []);
       setReferralRecords(data.referralRecords ?? []);
       setPromoCodes(data.promoCodes ?? []);
@@ -130,6 +242,34 @@ export default function ReferralsPage() {
   useEffect(() => {
     loadReferrals();
   }, []);
+
+  const draftTotalPool = useMemo(() => {
+    return draftTiers.reduce((sum, t) => {
+      const from = Math.max(1, Number(t.rank_from) || 1);
+      const to = Math.max(from, Number(t.rank_to) || from);
+      const amt = Math.max(0, Number(t.amount) || 0);
+      return sum + (to - from + 1) * amt;
+    }, 0);
+  }, [draftTiers]);
+
+  const draftWinnerSpots = useMemo(() => {
+    return draftTiers.reduce((maxRank, t) => {
+      const amt = Math.max(0, Number(t.amount) || 0);
+      if (amt <= 0) return maxRank;
+      const to = Math.max(Number(t.rank_from) || 1, Number(t.rank_to) || 1);
+      return Math.max(maxRank, to);
+    }, 0);
+  }, [draftTiers]);
+
+  const currentCashWinners = useMemo(
+    () => leaderboard.filter((r) => r.cashRank !== null && r.cycleVerifiedReferrals > 0),
+    [leaderboard]
+  );
+
+  const currentProjectedPayoutTotal = useMemo(
+    () => currentCashWinners.reduce((sum, w) => sum + w.prizeAmount, 0),
+    [currentCashWinners]
+  );
 
   const filteredLeaderboard = useMemo(() => {
     const q = search.trim().toLowerCase();
@@ -154,6 +294,81 @@ export default function ReferralsPage() {
       return true;
     });
   }, [referralRecords, search, onlySuspicious]);
+
+  function showSuccess(msg: string) {
+    setToast(msg);
+    setTimeout(() => setToast(""), 4500);
+  }
+
+  async function handleSavePrizeConfig(e: React.FormEvent) {
+    e.preventDefault();
+    setError("");
+    if (draftTiers.length === 0) {
+      setError("Add at least one prize tier before saving.");
+      return;
+    }
+    setSavingConfig(true);
+    try {
+      const res = await fetch("/api/admin/referrals", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "save_prize_config",
+          title: draftTitle,
+          enabled: draftEnabled,
+          endsNote: draftEndsNote,
+          prizeTiers: draftTiers,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error || "Failed to save prize configuration.");
+      } else {
+        setShowPrizeStudio(false);
+        showSuccess("Referral cash prize tiers updated across Player and Admin leaderboards.");
+        await loadReferrals();
+      }
+    } finally {
+      setSavingConfig(false);
+    }
+  }
+
+  function openResetModal() {
+    const nextNum = config.cycleNumber + 1;
+    const suggestedTitle = /#\d+\b/.test(config.title)
+      ? config.title.replace(/#\d+\b/, `#${nextNum}`)
+      : `Referral Cash Challenge #${nextNum}`;
+    setNextCycleTitle(suggestedTitle);
+    resetDialogRef.current?.showModal();
+  }
+
+  async function handleConfirmReset(e: React.FormEvent) {
+    e.preventDefault();
+    setError("");
+    setResettingCycle(true);
+    try {
+      const res = await fetch("/api/admin/referrals", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          action: "reset_leaderboard",
+          nextTitle: nextCycleTitle,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setError(data.error || "Failed to reset referral leaderboard.");
+      } else {
+        resetDialogRef.current?.close("confirmed");
+        showSuccess(
+          `Cycle #${config.cycleNumber} archived (${data.archivedCount ?? 0} referrers saved). New cycle started at 0.`
+        );
+        await loadReferrals();
+      }
+    } finally {
+      setResettingCycle(false);
+    }
+  }
 
   async function handleCreatePromo(e: React.FormEvent) {
     e.preventDefault();
@@ -181,8 +396,7 @@ export default function ReferralsPage() {
         setPromoCampaign("");
         setPromoNote("");
         setPromoCodes(data.promoCodes ?? []);
-        setToast("Promo code created and activated!");
-        setTimeout(() => setToast(""), 4000);
+        showSuccess("Promo code created and activated.");
       }
     } finally {
       setSavingPromo(false);
@@ -234,8 +448,7 @@ export default function ReferralsPage() {
       if (res.ok) {
         setReferredUserId("");
         setReferrerUserId("");
-        setToast("Referral attribution linked and leaderboard updated!");
-        setTimeout(() => setToast(""), 4000);
+        showSuccess("Referral attribution linked and leaderboard updated.");
         await loadReferrals();
       }
     } finally {
@@ -249,44 +462,59 @@ export default function ReferralsPage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ action: "flag_suspicious", userId }),
     });
-    setToast(`@${username} suspended and flagged for suspicious referral activity.`);
-    setTimeout(() => setToast(""), 4000);
+    showSuccess(`@${username} suspended and flagged for suspicious referral activity.`);
     await loadReferrals();
   }
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
       {/* Header */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 border-b border-white/10 pb-5">
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 border-b border-white/10 pb-5">
         <div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <h1 className="text-2xl sm:text-3xl font-extrabold text-white tracking-tight">
-              Referral &amp; Promo Management
+              Referral Cash Leaderboard &amp; Promo Control
             </h1>
             <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30">
-              Growth &amp; Attribution
+              Cycle #{config.cycleNumber}
             </span>
           </div>
           <p className="text-slate-400 text-sm mt-1">
-            Track player referrals, monitor the monthly referral leaderboard, manage marketing promo codes, and detect suspicious referral clusters.
+            Set referral cash prizes by rank, track verified playing referrals, reset cycles cleanly with archived winners, and audit promo codes.
           </p>
         </div>
 
         <div className="flex flex-wrap items-center gap-2.5">
+          <button
+            type="button"
+            onClick={() => setShowPrizeStudio((prev) => !prev)}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs transition-colors"
+          >
+            <Coins className="size-4" />
+            <span>{showPrizeStudio ? "Close Prize Editor" : "Configure Cash Prizes"}</span>
+          </button>
+          <button
+            type="button"
+            onClick={openResetModal}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/35 text-rose-300 font-bold text-xs transition-colors"
+          >
+            <RotateCcw className="size-4" />
+            <span>Reset Leaderboard</span>
+          </button>
           <Link
             href="/admin/players"
             className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-white/5 hover:bg-white/10 border border-white/10 text-xs font-semibold text-slate-200 transition-colors"
           >
             <Users className="size-4 text-slate-400" />
-            <span>Back to Players</span>
+            <span>Players</span>
           </Link>
           <a
             href="/api/admin/referrals?format=csv"
             download
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs transition-colors"
+            className="inline-flex items-center gap-2 px-3.5 py-2 rounded-xl bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold text-xs transition-colors"
           >
             <Download className="size-4" />
-            <span>Generate Referral Report (CSV)</span>
+            <span>Export CSV</span>
           </a>
         </div>
       </div>
@@ -312,45 +540,305 @@ export default function ReferralsPage() {
         </div>
       )}
 
+      {/* Collapsible Cash Prize Configuration Studio */}
+      {showPrizeStudio && (
+        <form
+          onSubmit={handleSavePrizeConfig}
+          className="rounded-3xl p-5 sm:p-6 bg-[#0f1219] border border-amber-500/35 space-y-5 shadow-2xl"
+        >
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 border-b border-white/10 pb-4">
+            <div>
+              <span className="text-[11px] font-bold uppercase tracking-wider text-amber-400">
+                Cash Prize Configuration
+              </span>
+              <h2 className="text-lg font-extrabold text-white">
+                {config.title} Prize Structure
+              </h2>
+              <p className="text-xs text-slate-400">
+                Each ranked winner on the Player Referral Leaderboard displays their projected cash amount prominently beside their rank.
+              </p>
+            </div>
+            <div className="text-left sm:text-right">
+              <p className="text-[11px] uppercase tracking-wider text-slate-400">
+                Configured Total Pool
+              </p>
+              <p className="text-2xl font-extrabold text-emerald-400 font-mono tabular-nums">
+                ₦{draftTotalPool.toLocaleString()}
+              </p>
+              <p className="text-[11px] text-slate-400">
+                {draftWinnerSpots} paid winner spot{draftWinnerSpots === 1 ? "" : "s"}
+              </p>
+            </div>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+            <div>
+              <label
+                htmlFor="ref-cycle-title"
+                className="block text-xs font-semibold text-slate-300 mb-1.5"
+              >
+                Challenge Title
+              </label>
+              <input
+                id="ref-cycle-title"
+                type="text"
+                value={draftTitle}
+                onChange={(e) => setDraftTitle(e.target.value)}
+                required
+                className="w-full px-3.5 py-2.5 rounded-xl bg-white/[0.03] border border-white/10 text-xs text-white focus:border-amber-500 focus:outline-none"
+                placeholder="e.g. Referral Cash Challenge #1"
+              />
+            </div>
+
+            <div>
+              <label
+                htmlFor="ref-cycle-note"
+                className="block text-xs font-semibold text-slate-300 mb-1.5"
+              >
+                Qualification / Closing Note
+              </label>
+              <input
+                id="ref-cycle-note"
+                type="text"
+                value={draftEndsNote}
+                onChange={(e) => setDraftEndsNote(e.target.value)}
+                className="w-full px-3.5 py-2.5 rounded-xl bg-white/[0.03] border border-white/10 text-xs text-white focus:border-amber-500 focus:outline-none"
+                placeholder="e.g. Friends must play at least 1 round to qualify"
+              />
+            </div>
+
+            <div>
+              <label
+                htmlFor="ref-cycle-status"
+                className="block text-xs font-semibold text-slate-300 mb-1.5"
+              >
+                Cash Rewards Status
+              </label>
+              <select
+                id="ref-cycle-status"
+                value={draftEnabled ? "enabled" : "paused"}
+                onChange={(e) => setDraftEnabled(e.target.value === "enabled")}
+                className="w-full px-3.5 py-2.5 rounded-xl bg-[#161b27] border border-white/10 text-xs font-semibold text-white focus:border-amber-500 focus:outline-none"
+              >
+                <option value="enabled">Active (Cash Prizes Displayed Live)</option>
+                <option value="paused">Paused (Show Referrals Count Only)</option>
+              </select>
+            </div>
+          </div>
+
+          <fieldset className="space-y-3 border border-white/10 rounded-2xl p-4 bg-[#0b0e14]">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <legend className="text-xs font-bold uppercase tracking-wider text-amber-300">
+                Rank Prize Tiers (NGN)
+              </legend>
+              <button
+                type="button"
+                onClick={() => {
+                  const lastTo =
+                    draftTiers.length > 0
+                      ? Math.max(...draftTiers.map((t) => Number(t.rank_to) || 1))
+                      : 0;
+                  setDraftTiers([
+                    ...draftTiers,
+                    { rank_from: lastTo + 1, rank_to: lastTo + 1, amount: 5000 },
+                  ]);
+                }}
+                className="inline-flex items-center gap-1 px-3 py-1.5 rounded-xl bg-emerald-500/20 hover:bg-emerald-500/30 border border-emerald-500/40 text-emerald-300 text-xs font-bold"
+              >
+                <Plus className="size-3.5" />
+                <span>Add Prize Tier</span>
+              </button>
+            </div>
+
+            <div className="space-y-2.5">
+              {draftTiers.map((tier, idx) => (
+                <div
+                  key={idx}
+                  className="grid grid-cols-12 items-center gap-2.5 p-2.5 rounded-xl bg-white/[0.02] border border-white/10"
+                >
+                  <div className="col-span-3 sm:col-span-3">
+                    <label
+                      htmlFor={`tier-from-${idx}`}
+                      className="block text-[10px] uppercase text-slate-400 mb-1"
+                    >
+                      From Rank
+                    </label>
+                    <input
+                      id={`tier-from-${idx}`}
+                      type="number"
+                      min={1}
+                      value={tier.rank_from}
+                      onChange={(e) => {
+                        const val = Math.max(1, Number(e.target.value) || 1);
+                        const next = [...draftTiers];
+                        next[idx] = {
+                          ...next[idx],
+                          rank_from: val,
+                          rank_to: Math.max(val, next[idx].rank_to),
+                        };
+                        setDraftTiers(next);
+                      }}
+                      className="w-full px-3 py-2 rounded-lg bg-white/[0.03] border border-white/10 text-xs font-mono text-white"
+                    />
+                  </div>
+
+                  <div className="col-span-3 sm:col-span-3">
+                    <label
+                      htmlFor={`tier-to-${idx}`}
+                      className="block text-[10px] uppercase text-slate-400 mb-1"
+                    >
+                      To Rank
+                    </label>
+                    <input
+                      id={`tier-to-${idx}`}
+                      type="number"
+                      min={tier.rank_from}
+                      value={tier.rank_to}
+                      onChange={(e) => {
+                        const val = Math.max(tier.rank_from, Number(e.target.value) || tier.rank_from);
+                        const next = [...draftTiers];
+                        next[idx] = { ...next[idx], rank_to: val };
+                        setDraftTiers(next);
+                      }}
+                      className="w-full px-3 py-2 rounded-lg bg-white/[0.03] border border-white/10 text-xs font-mono text-white"
+                    />
+                  </div>
+
+                  <div className="col-span-4 sm:col-span-4">
+                    <label
+                      htmlFor={`tier-amt-${idx}`}
+                      className="block text-[10px] uppercase text-slate-400 mb-1"
+                    >
+                      Cash Prize Each (₦)
+                    </label>
+                    <input
+                      id={`tier-amt-${idx}`}
+                      type="number"
+                      min={0}
+                      step={500}
+                      value={tier.amount}
+                      onChange={(e) => {
+                        const val = Math.max(0, Number(e.target.value) || 0);
+                        const next = [...draftTiers];
+                        next[idx] = { ...next[idx], amount: val };
+                        setDraftTiers(next);
+                      }}
+                      className="w-full px-3 py-2 rounded-lg bg-white/[0.03] border border-white/10 text-xs font-mono font-bold text-emerald-300"
+                    />
+                  </div>
+
+                  <div className="col-span-2 flex justify-end pt-4">
+                    <button
+                      type="button"
+                      disabled={draftTiers.length <= 1}
+                      onClick={() => setDraftTiers(draftTiers.filter((_, i) => i !== idx))}
+                      aria-label={`Remove tier ${idx + 1}`}
+                      className="p-2 rounded-lg bg-rose-500/15 hover:bg-rose-500/25 disabled:opacity-35 text-rose-300"
+                    >
+                      <Trash2 className="size-4" />
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </fieldset>
+
+          <div className="flex flex-wrap items-center justify-end gap-3 pt-1">
+            <button
+              type="button"
+              onClick={() => setShowPrizeStudio(false)}
+              className="px-4 py-2.5 rounded-xl bg-white/5 hover:bg-white/10 text-slate-300 text-xs font-semibold"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={savingConfig}
+              className="px-5 py-2.5 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-xs"
+            >
+              {savingConfig ? "Saving..." : "Save Prize Structure"}
+            </button>
+          </div>
+        </form>
+      )}
+
+      {/* Active Cycle Summary Banner */}
+      <div className="rounded-2xl p-4 bg-[#0f1219] border border-white/10 flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div className="space-y-1">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="text-xs font-bold text-white">{config.title}</span>
+            <span
+              className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
+                config.enabled
+                  ? "bg-emerald-500/15 text-emerald-300 border border-emerald-500/30"
+                  : "bg-white/10 text-slate-400"
+              }`}
+            >
+              {config.enabled ? "Cash Prizes Active" : "Prizes Paused"}
+            </span>
+          </div>
+          <p className="text-xs text-slate-400">
+            {config.endsNote}.{" "}
+            {config.cycleStartedAt
+              ? `Cycle started ${new Date(config.cycleStartedAt).toLocaleString("en-NG", { dateStyle: "medium", timeStyle: "short" })}.`
+              : "Counting all verified playing referrals since launch."}
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-2">
+          {config.prizeTiers.slice(0, 4).map((tier, idx) => (
+            <span
+              key={idx}
+              className="px-2.5 py-1 rounded-xl bg-white/[0.04] border border-white/10 text-[11px] font-mono text-slate-200"
+            >
+              {formatTierRange(tier)}: <strong className="text-emerald-300">₦{tier.amount.toLocaleString()}</strong>
+            </span>
+          ))}
+        </div>
+      </div>
+
       {/* KPI Cards */}
       <div className="grid grid-cols-2 md:grid-cols-5 gap-3.5">
         <div className="rounded-2xl p-4 bg-[#0f1219] border border-white/10">
           <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
-            Referred Players
+            Cycle Prize Pool
+          </p>
+          <p className="text-2xl font-extrabold text-emerald-400 mt-1 tabular-nums">
+            ₦{config.totalPool.toLocaleString()}
+          </p>
+          <p className="text-[11px] text-slate-500 mt-0.5">
+            Top {config.totalWinnerSpots} paid spot{config.totalWinnerSpots === 1 ? "" : "s"}
+          </p>
+        </div>
+
+        <div className="rounded-2xl p-4 bg-[#0f1219] border border-white/10">
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+            Cycle Verified Refs
           </p>
           <p className="text-2xl font-extrabold text-amber-400 mt-1 tabular-nums">
+            {summary.cycleVerifiedTotal.toLocaleString()}
+          </p>
+          <p className="text-[11px] text-slate-500 mt-0.5">
+            {summary.eligibleWinnersCount} ranked referrer{summary.eligibleWinnersCount === 1 ? "" : "s"}
+          </p>
+        </div>
+
+        <div className="rounded-2xl p-4 bg-[#0f1219] border border-white/10">
+          <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
+            Lifetime Referred
+          </p>
+          <p className="text-2xl font-extrabold text-white mt-1 tabular-nums">
             {summary.totalReferredPlayers.toLocaleString()}
           </p>
           <p className="text-[11px] text-slate-500 mt-0.5">
-            {summary.referralAcquisitionSharePct}% of {summary.totalPlayers} total players
+            {summary.activeReferredPlayers} played at least 1 round
           </p>
-        </div>
-
-        <div className="rounded-2xl p-4 bg-[#0f1219] border border-white/10">
-          <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
-            Active Playing Referrals
-          </p>
-          <p className="text-2xl font-extrabold text-emerald-400 mt-1 tabular-nums">
-            {summary.activeReferredPlayers.toLocaleString()}
-          </p>
-          <p className="text-[11px] text-slate-500 mt-0.5">Played at least 1 game session</p>
-        </div>
-
-        <div className="rounded-2xl p-4 bg-[#0f1219] border border-white/10">
-          <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
-            Active Referrers
-          </p>
-          <p className="text-2xl font-extrabold text-white mt-1 tabular-nums">
-            {summary.activeReferrersCount.toLocaleString()}
-          </p>
-          <p className="text-[11px] text-slate-500 mt-0.5">Ambassadors &amp; players</p>
         </div>
 
         <div className="rounded-2xl p-4 bg-[#0f1219] border border-white/10">
           <p className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">
             Active Promo Codes
           </p>
-          <p className="text-2xl font-extrabold text-indigo-400 mt-1 tabular-nums">
+          <p className="text-2xl font-extrabold text-sky-400 mt-1 tabular-nums">
             {promoCodes.filter((c) => c.active).length}
           </p>
           <p className="text-[11px] text-slate-500 mt-0.5">
@@ -373,16 +861,17 @@ export default function ReferralsPage() {
       <div className="rounded-2xl p-4 bg-[#0f1219] border border-white/10 flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-3">
         <div className="flex flex-wrap items-center gap-1.5">
           {[
-            { id: "leaderboard", label: "Monthly Referral Leaderboard", icon: Trophy },
+            { id: "leaderboard", label: "Referral Cash Leaderboard", icon: Trophy },
             {
               id: "records",
               label: `All Referral Attribution (${referralRecords.length})`,
               icon: Users,
             },
+            { id: "archives", label: `Past Cycles (${archives.length})`, icon: Archive },
             { id: "promos", label: `Promo Codes (${promoCodes.length})`, icon: Ticket },
             {
               id: "suspicious",
-              label: `Suspicious Activity (${summary.suspiciousClustersCount})`,
+              label: `Suspicious (${summary.suspiciousClustersCount})`,
               icon: ShieldAlert,
             },
           ].map((tab) => {
@@ -393,7 +882,9 @@ export default function ReferralsPage() {
                 key={tab.id}
                 type="button"
                 onClick={() =>
-                  setActiveTab(tab.id as "leaderboard" | "records" | "promos" | "suspicious")
+                  setActiveTab(
+                    tab.id as "leaderboard" | "records" | "promos" | "suspicious" | "archives"
+                  )
                 }
                 className={`inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl text-xs font-semibold transition-colors ${
                   active
@@ -433,7 +924,7 @@ export default function ReferralsPage() {
         </div>
       </div>
 
-      {/* TAB 1: Monthly Referral Leaderboard */}
+      {/* TAB 1: Referral Cash Leaderboard */}
       {activeTab === "leaderboard" && (
         <div className="rounded-3xl overflow-hidden bg-[#0f1219] border border-white/10">
           {loading ? (
@@ -445,37 +936,55 @@ export default function ReferralsPage() {
               No referrer records match your filter.
             </div>
           ) : (
-            <div className="overflow-x-auto">
+            <div
+              tabIndex={0}
+              role="region"
+              aria-labelledby="admin-ref-lb-caption"
+              className="overflow-x-auto"
+            >
               <table className="w-full text-left text-sm">
+                <caption id="admin-ref-lb-caption" className="sr-only">
+                  Active cycle referral cash prize leaderboard
+                </caption>
                 <thead>
                   <tr className="border-b border-white/10 bg-white/[0.02] text-[11px] font-semibold uppercase tracking-wider text-slate-400">
                     <th className="px-5 py-3.5">Rank</th>
+                    <th className="px-4 py-3.5">Cash Prize (₦)</th>
                     <th className="px-4 py-3.5">Referrer Player</th>
                     <th className="px-4 py-3.5">Referral Code</th>
-                    <th className="px-4 py-3.5">Total Referrals</th>
-                    <th className="px-4 py-3.5">This Month (30d)</th>
-                    <th className="px-4 py-3.5">Active Playing</th>
-                    <th className="px-4 py-3.5">Integrity Status</th>
+                    <th className="px-4 py-3.5">Cycle Verified</th>
+                    <th className="px-4 py-3.5">Lifetime Active / Total</th>
+                    <th className="px-4 py-3.5">Integrity</th>
                     <th className="px-5 py-3.5 text-right">Action</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-white/5">
                   {filteredLeaderboard.map((row) => (
                     <tr key={row.userId} className="hover:bg-white/[0.02] transition-colors">
-                      <td className="px-5 py-3.5">
+                      <th scope="row" className="px-5 py-3.5 text-left font-normal">
                         <span
-                          className={`inline-flex items-center justify-center size-7 rounded-lg text-xs font-extrabold ${
-                            row.rank === 1
+                          className={`inline-flex items-center justify-center min-w-8 h-7 px-2 rounded-lg text-xs font-extrabold ${
+                            row.cashRank === 1
                               ? "bg-amber-500 text-slate-950"
-                              : row.rank === 2
+                              : row.cashRank === 2
                               ? "bg-slate-300 text-slate-950"
-                              : row.rank === 3
+                              : row.cashRank === 3
                               ? "bg-amber-700 text-white"
                               : "bg-white/5 text-slate-300"
                           }`}
                         >
-                          #{row.rank}
+                          {row.cashRank ? formatOrdinal(row.cashRank) : `#${row.rank}`}
                         </span>
+                      </th>
+
+                      <td className="px-4 py-3.5 font-mono font-extrabold tabular-nums">
+                        {row.prizeAmount > 0 ? (
+                          <span className="inline-flex items-center px-2.5 py-1 rounded-lg bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-xs">
+                            ₦{row.prizeAmount.toLocaleString()}
+                          </span>
+                        ) : (
+                          <span className="text-xs text-slate-500">-</span>
+                        )}
                       </td>
 
                       <td className="px-4 py-3.5">
@@ -486,24 +995,29 @@ export default function ReferralsPage() {
                       </td>
 
                       <td className="px-4 py-3.5">
-                        <span className="px-2.5 py-1 rounded-lg bg-indigo-500/15 border border-indigo-500/30 font-mono text-xs font-bold text-indigo-300">
+                        <span className="px-2.5 py-1 rounded-lg bg-sky-500/15 border border-sky-500/30 font-mono text-xs font-bold text-sky-300">
                           {row.referralCode}
                         </span>
                       </td>
 
-                      <td className="px-4 py-3.5 font-extrabold text-amber-400 tabular-nums">
-                        {row.totalReferrals}
-                      </td>
-
-                      <td className="px-4 py-3.5 font-semibold text-white tabular-nums">
-                        {row.monthlyReferrals}
+                      <td className="px-4 py-3.5 tabular-nums">
+                        <span className="font-extrabold text-amber-400 text-base">
+                          {row.cycleVerifiedReferrals}
+                        </span>
+                        {row.cycleSignups > row.cycleVerifiedReferrals && (
+                          <span className="ml-1.5 text-[11px] text-slate-400">
+                            ({row.cycleSignups} signups)
+                          </span>
+                        )}
                       </td>
 
                       <td className="px-4 py-3.5 text-xs tabular-nums">
                         <span className="font-bold text-emerald-400">
                           {row.activePlayingReferrals}
                         </span>{" "}
-                        <span className="text-slate-400">({row.conversionRatePct}%)</span>
+                        <span className="text-slate-400">
+                          / {row.totalReferrals} ({row.conversionRatePct}%)
+                        </span>
                       </td>
 
                       <td className="px-4 py-3.5">
@@ -550,7 +1064,6 @@ export default function ReferralsPage() {
       {/* TAB 2: All Referral Attribution Records + Link Referral Tool */}
       {activeTab === "records" && (
         <div className="space-y-5">
-          {/* Assign Referral Attribution Form */}
           <form
             onSubmit={handleAssignReferral}
             className="rounded-2xl p-5 bg-[#0f1219] border border-white/10 flex flex-col md:flex-row items-stretch md:items-end gap-3"
@@ -607,15 +1120,23 @@ export default function ReferralsPage() {
                 No referral attribution records yet. Use the form above to link a referral or share referral codes with players.
               </div>
             ) : (
-              <div className="overflow-x-auto">
+              <div
+                tabIndex={0}
+                role="region"
+                aria-labelledby="admin-ref-records-caption"
+                className="overflow-x-auto"
+              >
                 <table className="w-full text-left text-sm">
+                  <caption id="admin-ref-records-caption" className="sr-only">
+                    Individual referral attribution records
+                  </caption>
                   <thead>
                     <tr className="border-b border-white/10 bg-white/[0.02] text-[11px] font-semibold uppercase tracking-wider text-slate-400">
                       <th className="px-5 py-3.5">Referred Player</th>
                       <th className="px-4 py-3.5">Referred By</th>
                       <th className="px-4 py-3.5">Code Used</th>
                       <th className="px-4 py-3.5">Sessions Played</th>
-                      <th className="px-4 py-3.5">Status</th>
+                      <th className="px-4 py-3.5">Cycle Status</th>
                       <th className="px-5 py-3.5 text-right">Signup Date</th>
                     </tr>
                   </thead>
@@ -629,7 +1150,7 @@ export default function ReferralsPage() {
                           </p>
                         </td>
                         <td className="px-4 py-3.5">
-                          <p className="font-bold text-indigo-300">@{rec.referrerUsername}</p>
+                          <p className="font-bold text-sky-300">@{rec.referrerUsername}</p>
                           <p className="text-xs text-slate-400">{rec.referrerFullName}</p>
                         </td>
                         <td className="px-4 py-3.5 font-mono text-xs font-bold text-amber-300">
@@ -643,9 +1164,17 @@ export default function ReferralsPage() {
                             <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-rose-500/15 text-rose-300">
                               Flagged
                             </span>
-                          ) : (
+                          ) : rec.isVerified ? (
                             <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-emerald-500/15 text-emerald-300">
-                              {rec.referredStatus}
+                              Verified (Cycle)
+                            </span>
+                          ) : !rec.inCurrentCycle ? (
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-white/10 text-slate-400">
+                              Past Cycle
+                            </span>
+                          ) : (
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-bold uppercase bg-amber-500/15 text-amber-300">
+                              Pending 1st Game
                             </span>
                           )}
                         </td>
@@ -662,7 +1191,88 @@ export default function ReferralsPage() {
         </div>
       )}
 
-      {/* TAB 3: Create and Manage Promo Codes */}
+      {/* TAB 3: Past Archived Referral Cycles */}
+      {activeTab === "archives" && (
+        <div className="space-y-4">
+          {archives.length === 0 ? (
+            <div className="rounded-3xl p-10 bg-[#0f1219] border border-white/10 text-center space-y-2">
+              <p className="text-sm font-bold text-white">No archived referral cycles yet</p>
+              <p className="text-xs text-slate-400 max-w-md mx-auto">
+                Whenever you click <strong>Reset Leaderboard</strong>, the current cycle&apos;s top verified referrers and their cash prize amounts are archived here before starting a new cycle from 0.
+              </p>
+            </div>
+          ) : (
+            archives.map((arc) => (
+              <div
+                key={arc.id}
+                className="rounded-3xl p-5 sm:p-6 bg-[#0f1219] border border-white/10 space-y-4"
+              >
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 pb-3">
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="px-2.5 py-0.5 rounded-full bg-white/10 text-[11px] font-bold text-slate-200">
+                        Cycle #{arc.cycleNumber}
+                      </span>
+                      <h2 className="text-base font-bold text-white">{arc.title}</h2>
+                    </div>
+                    <p className="text-xs text-slate-400 mt-1">
+                      Ended {new Date(arc.endedAt).toLocaleString("en-NG", { dateStyle: "medium", timeStyle: "short" })}
+                    </p>
+                  </div>
+                  <div className="text-right">
+                    <p className="text-[11px] uppercase text-slate-400">Cycle Pool</p>
+                    <p className="font-mono text-base font-extrabold text-emerald-400">
+                      ₦{arc.totalPool.toLocaleString()}
+                    </p>
+                  </div>
+                </div>
+
+                {arc.winners.length === 0 ? (
+                  <p className="text-xs text-slate-400">No verified referrals were recorded in this cycle.</p>
+                ) : (
+                  <div
+                    tabIndex={0}
+                    role="region"
+                    aria-label={`Archived winners for ${arc.title}`}
+                    className="overflow-x-auto"
+                  >
+                    <table className="w-full text-left text-xs sm:text-sm">
+                      <thead>
+                        <tr className="border-b border-white/10 text-slate-400 text-[11px] uppercase">
+                          <th className="py-2 pr-3">Rank</th>
+                          <th className="py-2 pr-3">Prize (₦)</th>
+                          <th className="py-2 pr-3">Winner</th>
+                          <th className="py-2 text-right">Verified Refs</th>
+                        </tr>
+                      </thead>
+                      <tbody className="divide-y divide-white/5">
+                        {arc.winners.map((w) => (
+                          <tr key={`${arc.id}_${w.userId}`}>
+                            <td className="py-2.5 pr-3 font-bold text-amber-300">
+                              {formatOrdinal(w.rank)}
+                            </td>
+                            <td className="py-2.5 pr-3 font-mono font-bold text-emerald-400">
+                              ₦{w.prizeAmount.toLocaleString()}
+                            </td>
+                            <td className="py-2.5 pr-3 font-semibold text-white">
+                              @{w.username} <span className="text-slate-400 font-normal">({w.state})</span>
+                            </td>
+                            <td className="py-2.5 text-right font-mono font-bold text-slate-200">
+                              {w.verifiedReferrals}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
+            ))
+          )}
+        </div>
+      )}
+
+      {/* TAB 4: Create and Manage Promo Codes */}
       {activeTab === "promos" && (
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
           <div className="rounded-3xl p-6 bg-[#0f1219] border border-white/10 space-y-4 h-fit">
@@ -787,7 +1397,7 @@ export default function ReferralsPage() {
         </div>
       )}
 
-      {/* TAB 4: Identify Suspicious Referral Activity */}
+      {/* TAB 5: Identify Suspicious Referral Activity */}
       {activeTab === "suspicious" && (
         <div className="rounded-3xl p-6 bg-[#0f1219] border border-white/10 space-y-4">
           <div className="flex items-center justify-between">
@@ -842,6 +1452,86 @@ export default function ReferralsPage() {
           )}
         </div>
       )}
+
+      {/* Native <dialog> Confirmation Modal for Resetting Referral Leaderboard */}
+      <dialog
+        ref={resetDialogRef}
+        aria-labelledby="reset-ref-title"
+        className="m-auto w-[calc(100%-2rem)] max-w-md rounded-3xl bg-[#0f1219] border border-rose-500/40 p-6 text-white shadow-2xl"
+      >
+        <div className="flex items-start justify-between gap-3 mb-4">
+          <div>
+            <span className="px-2.5 py-0.5 rounded-full bg-rose-500/20 text-rose-300 text-[11px] font-bold uppercase">
+              New Referral Cycle
+            </span>
+            <h2 id="reset-ref-title" className="text-lg font-extrabold text-white mt-1.5">
+              Archive &amp; Reset Referral Leaderboard?
+            </h2>
+          </div>
+          <button
+            type="button"
+            onClick={() => resetDialogRef.current?.close("dismissed")}
+            aria-label="Close reset dialog"
+            className="p-2 rounded-xl bg-white/5 hover:bg-white/10 text-slate-300"
+          >
+            <X className="size-4" />
+          </button>
+        </div>
+
+        <form onSubmit={handleConfirmReset} className="space-y-4">
+          <div className="rounded-2xl p-3.5 bg-white/[0.03] border border-white/10 space-y-1 text-xs">
+            <p className="font-bold text-white">{config.title}</p>
+            <p className="text-slate-300">
+              <strong>{currentCashWinners.length}</strong> ranked referrer(s) totaling{" "}
+              <strong className="text-emerald-400">
+                ₦{currentProjectedPayoutTotal.toLocaleString()}
+              </strong>{" "}
+              will be archived under Past Cycles.
+            </p>
+            <p className="text-slate-400">
+              All lifetime referral links stay intact, while the active cycle count resets to 0 for new signups starting now.
+            </p>
+          </div>
+
+          <div>
+            <label
+              htmlFor="next-cycle-title"
+              className="block text-xs font-semibold text-slate-300 mb-1.5"
+            >
+              Next Cycle Title
+            </label>
+            <input
+              id="next-cycle-title"
+              type="text"
+              value={nextCycleTitle}
+              onChange={(e) => setNextCycleTitle(e.target.value)}
+              required
+              className="w-full px-3.5 py-2.5 rounded-xl bg-white/[0.04] border border-white/10 text-xs text-white focus:border-amber-500 focus:outline-none"
+              placeholder={`Referral Cash Challenge #${config.cycleNumber + 1}`}
+            />
+          </div>
+
+          <div className="flex items-center justify-end gap-2.5 pt-2 border-t border-white/10">
+            <button
+              type="button"
+              autoFocus
+              disabled={resettingCycle}
+              onClick={() => resetDialogRef.current?.close("cancel")}
+              className="px-4 py-2.5 rounded-xl bg-white/5 hover:bg-white/10 text-slate-200 text-xs font-semibold"
+            >
+              Cancel
+            </button>
+            <button
+              type="submit"
+              disabled={resettingCycle}
+              className="inline-flex items-center gap-1.5 px-4 py-2.5 rounded-xl bg-rose-500 hover:bg-rose-400 text-slate-950 text-xs font-extrabold"
+            >
+              <RotateCcw className="size-3.5" />
+              <span>{resettingCycle ? "Resetting..." : "Archive Winners & Reset to 0"}</span>
+            </button>
+          </div>
+        </form>
+      </dialog>
     </div>
   );
 }

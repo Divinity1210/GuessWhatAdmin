@@ -100,3 +100,15 @@ body {
 .animate-pulse-glow {
   animation: pulseGlow 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
 }
+
+/* Native <dialog> top-layer scroll containment & backdrop */
+dialog:modal {
+  overscroll-behavior: contain;
+}
+
+dialog::backdrop {
+  overflow: hidden;
+  overscroll-behavior: contain;
+  background: rgba(4, 6, 12, 0.8);
+  backdrop-filter: blur(8px);
+}
