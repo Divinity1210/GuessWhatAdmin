@@ -778,6 +778,14 @@ export default function SessionsPage() {
             </div>
 
             <form onSubmit={handleSaveSession} className="space-y-5">
+              {error && (
+                <div
+                  role="alert"
+                  className="rounded-xl border border-rose-500/40 bg-rose-500/15 px-4 py-3 text-xs font-bold text-rose-200"
+                >
+                  ⚠ {error}
+                </div>
+              )}
               <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
                 <div className="sm:col-span-2">
                   <label

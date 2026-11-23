@@ -215,6 +215,16 @@ async function compressBannerImage(
   });
 }
 
+async function parseApiJson(res: Response): Promise<Record<string, unknown>> {
+  const raw = await res.text();
+  if (!raw) return {};
+  try {
+    return JSON.parse(raw) as Record<string, unknown>;
+  } catch {
+    return { error: `Server returned HTTP ${res.status}: ${raw.slice(0, 140)}` };
+  }
+}
+
 async function uploadImageToStorage(
   file: File,
   extra?: { optionId?: string; questionId?: string; mode?: "option" | "banner" }
@@ -239,11 +249,15 @@ async function uploadImageToStorage(
     method: "POST",
     body: formData,
   });
-  const data = await res.json();
-  if (!res.ok || !data.url) {
-    throw new Error(data.error || "Image upload failed");
+  const data = await parseApiJson(res);
+  if (!res.ok || typeof data.url !== "string" || !data.url) {
+    throw new Error(
+      typeof data.error === "string" && data.error
+        ? data.error
+        : `Image upload failed (HTTP ${res.status})`
+    );
   }
-  return data.url as string;
+  return data.url;
 }
 
 // Curated 10-option Nigerian & Global Crowd Templates (Picture + Text Templates from Product Doc Pages 11 to 15 & 30)
@@ -538,6 +552,9 @@ export default function QuestionsPage() {
   const [showAIGenerator, setShowAIGenerator] = useState(false);
   const [selectedQuestionId, setSelectedQuestionId] = useState<string | null>(null);
   const [toast, setToast] = useState<string>("");
+  const [pageError, setPageError] = useState<string>("");
+  const [formError, setFormError] = useState<string>("");
+  const [editError, setEditError] = useState<string>("");
 
   // Upload loading state keyed by slot identifier (e.g. "create-0", "edit-2", "inline-optId")
   const [uploadingSlot, setUploadingSlot] = useState<Record<string, boolean>>({});
@@ -800,7 +817,9 @@ export default function QuestionsPage() {
 
   const quickPublishAITemplate = async (tpl: (typeof AI_QUESTION_TEMPLATES)[number]) => {
     setCreating(true);
+    setPageError("");
     try {
+      const targetSession = selectedSessionId !== "all" ? selectedSessionId : undefined;
       const res = await fetch("/api/admin/questions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -810,25 +829,72 @@ export default function QuestionsPage() {
           type: tpl.type,
           status: "published",
           options: tpl.options,
-          assignToSessionId: selectedSessionId !== "all" ? selectedSessionId : undefined,
+          assignToSessionId: targetSession,
         }),
       });
-      if (res.ok) {
-        showToastMsg(`Published "${tpl.key}" 10-option question to Question Bank!`);
-        await loadQuestions();
+      const data = await parseApiJson(res);
+      if (!res.ok) {
+        setPageError(
+          typeof data.error === "string"
+            ? data.error
+            : `Failed to publish "${tpl.key}" (HTTP ${res.status}).`
+        );
+        return;
       }
+      setFilter("all");
+      setTypeFilter("all");
+      setSearch("");
+      const created = data.question as { id?: string } | undefined;
+      if (created?.id) setSelectedQuestionId(created.id);
+      showToastMsg(`Published "${tpl.key}" 10-option question to Question Bank!`);
+      await loadQuestions();
+    } catch (err) {
+      setPageError(
+        err instanceof Error
+          ? `Publish failed: ${err.message}`
+          : "Network error while publishing question. Please retry."
+      );
     } finally {
       setCreating(false);
     }
   };
 
+  const isAnyCreateUploading = Object.entries(uploadingSlot).some(
+    ([k, v]) => v && (k.startsWith("create-") || k === "banner-create")
+  );
+
   const handleCreate = async (e: React.FormEvent) => {
     e.preventDefault();
-    const validOpts = options.filter((o) => o.label.trim());
-    if (!title.trim() || validOpts.length < 2) return;
-    setCreating(true);
+    setFormError("");
+    setPageError("");
 
+    if (isAnyCreateUploading) {
+      setFormError("Please wait for your image upload(s) to finish before publishing.");
+      return;
+    }
+
+    if (!title.trim()) {
+      setFormError("Please enter a Question Prompt before publishing.");
+      return;
+    }
+
+    const validOpts = options
+      .map((o, idx) => ({
+        label: o.label.trim() || (o.media_url.trim() ? `Option ${idx + 1}` : ""),
+        media_url: o.media_url.trim(),
+      }))
+      .filter((o) => Boolean(o.label));
+
+    if (validOpts.length < 2) {
+      setFormError(
+        "Please fill in at least 2 answer options (or upload at least 2 option pictures) before publishing."
+      );
+      return;
+    }
+
+    setCreating(true);
     try {
+      const targetSessionId = assignSessionId !== "all" ? assignSessionId : undefined;
       const res = await fetch("/api/admin/questions", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -839,31 +905,57 @@ export default function QuestionsPage() {
           status: createStatus,
           notes: questionBannerUrl || null,
           options: validOpts,
-          assignToSessionId:
-            assignSessionId !== "all"
-              ? assignSessionId
-              : selectedSessionId !== "all"
-              ? selectedSessionId
-              : undefined,
+          assignToSessionId: targetSessionId,
         }),
       });
-      const data = await res.json();
+      const data = await parseApiJson(res);
       if (!res.ok) {
-        alert(data.error || "Failed to create question");
-      } else {
-        setTitle("");
-        setQuestionBannerUrl("");
-        setOptions(Array.from({ length: 10 }, () => ({ label: "", media_url: "" })));
-        setShowCreate(false);
-        showToastMsg("Question saved to Question Bank!");
-        await loadQuestions();
+        setFormError(
+          typeof data.error === "string"
+            ? data.error
+            : `Failed to publish question (HTTP ${res.status}).`
+        );
+        return;
       }
+
+      const created = data.question as { id?: string } | undefined;
+      setTitle("");
+      setQuestionBannerUrl("");
+      setOptions(Array.from({ length: 10 }, () => ({ label: "", media_url: "" })));
+      setAssignSessionId("all");
+      setShowCreate(false);
+      setFilter("all");
+      setTypeFilter("all");
+      setSearch("");
+      if (targetSessionId) {
+        setSelectedSessionId(targetSessionId);
+      } else {
+        setSelectedSessionId("all");
+      }
+      if (created?.id) {
+        setSelectedQuestionId(created.id);
+      }
+      showToastMsg(
+        createStatus === "published"
+          ? targetSessionId
+            ? "Question published and assigned to the selected Game Session!"
+            : "Question published to Question Bank! Go to Game Sessions to add it to a live session."
+          : "Question saved as Draft in Question Bank!"
+      );
+      await loadQuestions();
+    } catch (err) {
+      setFormError(
+        err instanceof Error
+          ? `Could not publish question: ${err.message}`
+          : "Network error while publishing question. Check your connection and retry."
+      );
     } finally {
       setCreating(false);
     }
   };
 
   const openEditModal = (q: Question, forceImageMode = false) => {
+    setEditError("");
     setEditingQuestion(q);
     setEditTitle(q.title);
     setEditCategory(q.category);
@@ -884,6 +976,21 @@ export default function QuestionsPage() {
   const handleSaveEdit = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!editingQuestion) return;
+    setEditError("");
+
+    const validEditOpts = editOptions
+      .map((o, idx) => ({
+        id: o.id,
+        label: o.label.trim() || (o.media_url.trim() ? `Option ${idx + 1}` : ""),
+        media_url: o.media_url.trim(),
+      }))
+      .filter((o) => Boolean(o.label));
+
+    if (!editTitle.trim() || validEditOpts.length < 2) {
+      setEditError("Question prompt and at least 2 options are required.");
+      return;
+    }
+
     setSavingEdit(true);
     try {
       const res = await fetch("/api/admin/questions", {
@@ -891,35 +998,59 @@ export default function QuestionsPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           id: editingQuestion.id,
-          title: editTitle,
+          title: editTitle.trim(),
           category: editCategory,
           type: editType,
           status: editStatus,
           notes: editBannerUrl || null,
-          options: editOptions.filter((o) => o.label.trim()),
+          options: validEditOpts,
         }),
       });
+      const data = await parseApiJson(res);
       if (res.ok) {
         setEditingQuestion(null);
-        showToastMsg("Question & 10 options updated!");
+        showToastMsg("Question & options updated!");
         await loadQuestions();
       } else {
-        const d = await res.json();
-        alert(d.error || "Failed to update question");
+        setEditError(
+          typeof data.error === "string"
+            ? data.error
+            : `Failed to update question (HTTP ${res.status}).`
+        );
       }
+    } catch (err) {
+      setEditError(
+        err instanceof Error ? `Update failed: ${err.message}` : "Network error while saving."
+      );
     } finally {
       setSavingEdit(false);
     }
   };
 
   const updateStatus = async (id: string, status: string) => {
-    await fetch("/api/admin/questions", {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ id, status }),
-    });
-    showToastMsg(`Question status changed to ${status.toUpperCase()}`);
-    await loadQuestions();
+    setPageError("");
+    try {
+      const res = await fetch("/api/admin/questions", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id, status }),
+      });
+      const data = await parseApiJson(res);
+      if (!res.ok) {
+        setPageError(
+          typeof data.error === "string"
+            ? data.error
+            : `Failed to change status (HTTP ${res.status}).`
+        );
+        return;
+      }
+      showToastMsg(`Question status changed to ${status.toUpperCase()}`);
+      await loadQuestions();
+    } catch (err) {
+      setPageError(
+        err instanceof Error ? `Status update failed: ${err.message}` : "Network error."
+      );
+    }
   };
 
   const handleDeleteQuestion = (q: Question) => {
@@ -1080,6 +1211,22 @@ export default function QuestionsPage() {
           </div>
         </div>
       </div>
+
+      {pageError && (
+        <div
+          role="alert"
+          className="rounded-2xl px-4 py-3 bg-rose-500/15 border border-rose-500/35 text-rose-200 text-xs font-bold flex items-center justify-between gap-2"
+        >
+          <span>⚠ {pageError}</span>
+          <button
+            type="button"
+            onClick={() => setPageError("")}
+            className="text-rose-200 hover:text-white px-2"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       {/* Session-to-Session Navigator */}
       <div className="rounded-2xl p-4 bg-[#0f1219] border border-white/10 space-y-3">
@@ -1585,14 +1732,25 @@ export default function QuestionsPage() {
             </div>
           </fieldset>
 
+          {formError && (
+            <div
+              role="alert"
+              className="rounded-xl border border-rose-500/40 bg-rose-500/15 px-4 py-3 text-xs font-bold text-rose-200"
+            >
+              ⚠ {formError}
+            </div>
+          )}
+
           <div className="pt-4 border-t border-white/10 flex flex-wrap gap-3">
             <button
               type="submit"
-              disabled={creating}
-              className="px-6 py-3 rounded-xl bg-amber-500 hover:bg-amber-400 text-slate-950 font-bold text-sm"
+              disabled={creating || isAnyCreateUploading}
+              className="px-6 py-3 rounded-xl bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-slate-950 font-bold text-sm"
             >
-              {creating
-                ? "Saving..."
+              {isAnyCreateUploading
+                ? "Uploading Photos..."
+                : creating
+                ? "Publishing..."
                 : createStatus === "published"
                 ? "Publish Question"
                 : "Save as Draft"}
@@ -2121,6 +2279,14 @@ export default function QuestionsPage() {
             </div>
 
             <form onSubmit={handleSaveEdit} className="space-y-4">
+              {editError && (
+                <div
+                  role="alert"
+                  className="rounded-xl border border-rose-500/40 bg-rose-500/15 px-4 py-3 text-xs font-bold text-rose-200"
+                >
+                  ⚠ {editError}
+                </div>
+              )}
               <div>
                 <label
                   htmlFor="edit-question-prompt"

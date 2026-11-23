@@ -188,16 +188,47 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const hasImageOptions = options.some(
-      (opt: unknown) =>
-        typeof opt === "object" &&
-        opt !== null &&
-        "media_url" in opt &&
-        typeof (opt as { media_url?: unknown }).media_url === "string" &&
-        ((opt as { media_url: string }).media_url.startsWith("http") ||
-          (opt as { media_url: string }).media_url.startsWith("data:image/"))
+    const normalizedOptions = options
+      .map((opt: string | { label?: string; media_url?: string | null }, idx: number) => {
+        if (typeof opt === "string") {
+          return {
+            label: opt.trim(),
+            media_url: null as string | null,
+            position: idx,
+          };
+        }
+        const cleanMedia = opt?.media_url ? String(opt.media_url).trim() : null;
+        const rawLabel = (opt?.label || "").trim();
+        const cleanLabel = rawLabel || (cleanMedia ? `Option ${idx + 1}` : "");
+        return {
+          label: cleanLabel,
+          media_url: cleanMedia,
+          position: idx,
+        };
+      })
+      .filter((o: { label: string }) => Boolean(o.label));
+
+    if (normalizedOptions.length < 2) {
+      return NextResponse.json(
+        { error: "Please provide at least 2 options (labels or uploaded photos)." },
+        { status: 400 }
+      );
+    }
+
+    const hasImageOptions = normalizedOptions.some(
+      (opt: { media_url: string | null }) =>
+        typeof opt.media_url === "string" &&
+        (opt.media_url.startsWith("http") || opt.media_url.startsWith("data:image/"))
     );
-    const resolvedType = type === "text" && hasImageOptions ? "image" : type;
+    const allNumericLabels = normalizedOptions.every((opt: { label: string }) =>
+      /^\d+(\.\d+)?$/.test(opt.label)
+    );
+    let resolvedType = type;
+    if (type === "text" && hasImageOptions) {
+      resolvedType = "image";
+    } else if (type === "image" && !hasImageOptions) {
+      resolvedType = allNumericLabels ? "number" : "text";
+    }
 
     const { data: q, error: qError } = await supabase
       .from("questions")
@@ -219,30 +250,22 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    const cleanOptions = options
-      .map((opt: string | { label: string; media_url?: string | null }, idx: number) => {
-        if (typeof opt === "string") {
-          return {
-            question_id: q.id,
-            label: opt.trim(),
-            media_url: null,
-            position: idx,
-          };
-        }
-        return {
-          question_id: q.id,
-          label: (opt.label || "").trim(),
-          media_url: opt.media_url ? opt.media_url.trim() : null,
-          position: idx,
-        };
+    const cleanOptions = normalizedOptions.map(
+      (opt: { label: string; media_url: string | null }, idx: number) => ({
+        question_id: q.id,
+        label: opt.label,
+        media_url: opt.media_url,
+        position: idx,
       })
-      .filter((o: { label: string }) => Boolean(o.label));
+    );
 
     const { error: optError } = await supabase.from("question_options").insert(cleanOptions);
     if (optError) {
+      await supabase.from("questions").delete().eq("id", q.id);
       return NextResponse.json({ error: optError.message }, { status: 500 });
     }
 
+    let assignedSessionId: string | null = null;
     if (assignToSessionId && assignToSessionId !== "all") {
       const { data: existingSq } = await supabase
         .from("session_questions")
@@ -251,14 +274,19 @@ export async function POST(req: NextRequest) {
         .order("position", { ascending: false })
         .limit(1);
       const nextPos = (existingSq?.[0]?.position ?? 0) + 1;
-      await supabase.from("session_questions").insert({
+      const { error: sqErr } = await supabase.from("session_questions").insert({
         session_id: assignToSessionId,
         question_id: q.id,
         position: nextPos,
       });
+      if (!sqErr) {
+        assignedSessionId = assignToSessionId;
+      } else {
+        console.error("session_questions insert warning:", sqErr.message);
+      }
     }
 
-    return NextResponse.json({ ok: true, question: q });
+    return NextResponse.json({ ok: true, question: q, assignedSessionId });
   } catch (err) {
     return NextResponse.json(
       { error: err instanceof Error ? err.message : "Failed to create question" },
