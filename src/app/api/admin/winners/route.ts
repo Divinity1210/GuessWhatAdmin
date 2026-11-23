@@ -149,16 +149,19 @@ export async function GET(req: NextRequest) {
       });
     }
 
-    // Read bank_<userId> and payout_status_<sessionId> from app_settings
+    // Read payout_bank_<userId>, bank_<userId>, payout_status_<sessionId>, and payout_receipts from app_settings
     const bankByUserId = new Map<
       string,
       { bankName: string; accountNumber: string; accountName: string }
     >();
     let payoutStatuses: Record<string, string> = {};
+    const receiptIdByUserId = new Map<string, string>();
 
     for (const row of appSettings ?? []) {
-      if (row.key.startsWith("bank_")) {
-        const uid = row.key.replace("bank_", "");
+      if (row.key.startsWith("payout_bank_") || row.key.startsWith("bank_")) {
+        const uid = row.key.startsWith("payout_bank_")
+          ? row.key.replace("payout_bank_", "")
+          : row.key.replace("bank_", "");
         const val = (row.value ?? {}) as {
           bank_name?: string;
           bankName?: string;
@@ -167,15 +170,27 @@ export async function GET(req: NextRequest) {
           account_name?: string;
           accountName?: string;
         };
-        bankByUserId.set(uid, {
+        const candidate = {
           bankName: val.bankName || val.bank_name || "GTBank",
           accountNumber: val.accountNumber || val.account_number || "",
           accountName: val.accountName || val.account_name || "",
-        });
+        };
+        const prev = bankByUserId.get(uid);
+        if (!prev || (!prev.accountNumber && candidate.accountNumber) || (row.key.startsWith("payout_bank_") && candidate.accountNumber)) {
+          bankByUserId.set(uid, candidate);
+        }
       }
       if (row.key === `payout_status_${sessionId}`) {
         const val = (row.value ?? {}) as { statuses?: Record<string, string> };
         payoutStatuses = val.statuses ?? (row.value as Record<string, string>) ?? {};
+      }
+      if (row.key === "payout_receipts") {
+        const val = row.value as { receipts?: { id: string; sessionId?: string; userId?: string }[] } | null;
+        for (const r of val?.receipts ?? []) {
+          if (r.sessionId === sessionId && r.userId && !receiptIdByUserId.has(r.userId)) {
+            receiptIdByUserId.set(r.userId, r.id);
+          }
+        }
       }
     }
 
@@ -330,6 +345,7 @@ export async function GET(req: NextRequest) {
           accountName: bank.accountName || prof.fullName,
           paymentStatus: paymentStatus as "Pending" | "Paid" | "Failed",
           isPotentialWinner: targetSession.status !== "completed",
+          receiptId: receiptIdByUserId.get(e.user_id) ?? null,
         };
       });
 
@@ -506,17 +522,26 @@ export async function PATCH(req: NextRequest) {
       return NextResponse.json({ ok: true });
     }
 
-    // 3. Update winner bank details in app_settings (bank_<userId>)
+    // 3. Update winner bank details in app_settings (sync both bank_<userId> and payout_bank_<userId>)
     if (action === "update_bank" && userId) {
-      await supabase.from("app_settings").upsert({
-        key: `bank_${userId}`,
-        value: {
-          bankName: bankName || "GTBank",
-          accountNumber: accountNumber || "",
-          accountName: accountName || "",
-        },
-        updated_at: new Date().toISOString(),
-      });
+      const bankPayload = {
+        bankName: bankName || "GTBank",
+        accountNumber: accountNumber || "",
+        accountName: accountName || "",
+      };
+      const nowIso = new Date().toISOString();
+      await Promise.all([
+        supabase.from("app_settings").upsert({
+          key: `bank_${userId}`,
+          value: bankPayload,
+          updated_at: nowIso,
+        }),
+        supabase.from("app_settings").upsert({
+          key: `payout_bank_${userId}`,
+          value: bankPayload,
+          updated_at: nowIso,
+        }),
+      ]);
       return NextResponse.json({ ok: true });
     }
 

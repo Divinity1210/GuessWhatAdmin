@@ -1,6 +1,11 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import {
+  ReceiptGeneratorModal,
+  type PayoutReceiptRecord,
+  type ReceiptInitialData,
+} from "@/components/ReceiptGeneratorModal";
 
 type PrizeTier = {
   rank_from: number;
@@ -68,6 +73,7 @@ type WinnerRow = {
   accountName: string;
   paymentStatus: "Pending" | "Paid" | "Failed";
   isPotentialWinner: boolean;
+  receiptId?: string | null;
 };
 
 type SessionMeta = {
@@ -161,6 +167,13 @@ export default function AdminWinnersPage() {
   const [accountNumberInput, setAccountNumberInput] = useState<string>("");
   const [accountNameInput, setAccountNameInput] = useState<string>("");
 
+  // Payment Receipt Studio & Receipts Log state
+  const [receiptModalOpen, setReceiptModalOpen] = useState<boolean>(false);
+  const [receiptInitialData, setReceiptInitialData] = useState<ReceiptInitialData | null>(null);
+  const [receiptsLog, setReceiptsLog] = useState<PayoutReceiptRecord[]>([]);
+  const [showReceiptsLog, setShowReceiptsLog] = useState<boolean>(false);
+  const [receiptActionBusy, setReceiptActionBusy] = useState<string | null>(null);
+
   useEffect(() => {
     if (typeof window !== "undefined") {
       const sp = new URLSearchParams(window.location.search);
@@ -207,9 +220,59 @@ export default function AdminWinnersPage() {
     }
   }, [selectedSessionId]);
 
+  const fetchReceipts = useCallback(async () => {
+    try {
+      const res = await fetch("/api/admin/receipts", { cache: "no-store" });
+      if (res.ok) {
+        const data = await res.json();
+        setReceiptsLog((data.receipts as PayoutReceiptRecord[]) ?? []);
+      }
+    } catch {
+      // Ignore fetch errors
+    }
+  }, []);
+
   useEffect(() => {
     fetchWinners();
   }, [fetchWinners]);
+
+  useEffect(() => {
+    fetchReceipts();
+  }, [fetchReceipts]);
+
+  const handleReceiptAction = async (
+    receiptId: string,
+    action: "share_inbox" | "share_community" | "delete",
+  ) => {
+    setReceiptActionBusy(`${receiptId}:${action}`);
+    try {
+      if (action === "delete") {
+        await fetch(`/api/admin/receipts?id=${encodeURIComponent(receiptId)}`, {
+          method: "DELETE",
+        });
+        showToastMsg(`Receipt ${receiptId} removed.`);
+      } else {
+        const res = await fetch("/api/admin/receipts", {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ receiptId, action }),
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          showToastMsg(data.error || "Could not share receipt");
+          return;
+        }
+        showToastMsg(
+          action === "share_inbox"
+            ? `Receipt ${receiptId} sent to winner's Inbox!`
+            : `Receipt ${receiptId} published to Community Arena!`,
+        );
+      }
+      await Promise.all([fetchReceipts(), fetchWinners()]);
+    } finally {
+      setReceiptActionBusy(null);
+    }
+  };
 
   const currentIdx = sessions.findIndex((s) => s.id === (selectedSessionId || activeSession?.id));
   const goPrevSession = () => {
@@ -422,6 +485,29 @@ export default function AdminWinnersPage() {
 
         <div className="flex flex-wrap items-center gap-2.5">
           <button
+            type="button"
+            onClick={() => {
+              setReceiptInitialData({
+                sessionId: currentSessionId || undefined,
+                sessionName: activeSession?.name || "GuessWhat Live Session",
+                payoutType: "session_winner",
+              });
+              setReceiptModalOpen(true);
+            }}
+            className="px-4 py-2.5 rounded-xl bg-sky-500/20 hover:bg-sky-500/30 border border-sky-500/40 text-sky-200 font-bold text-xs sm:text-sm transition-colors"
+          >
+            + Custom Receipt
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowReceiptsLog(!showReceiptsLog)}
+            className="px-4 py-2.5 rounded-xl bg-white/[0.05] hover:bg-white/[0.1] border border-white/15 text-slate-200 font-bold text-xs sm:text-sm transition-colors"
+          >
+            {showReceiptsLog
+              ? "Hide Receipts Log"
+              : `Receipts Log (${receiptsLog.length})`}
+          </button>
+          <button
             onClick={() => setShowPrizeConfigurator(!showPrizeConfigurator)}
             className="px-4 py-2.5 rounded-xl bg-amber-500/20 hover:bg-amber-500/30 border border-amber-500/40 text-amber-300 font-bold text-xs sm:text-sm transition-colors"
           >
@@ -443,6 +529,158 @@ export default function AdminWinnersPage() {
       {toast && (
         <div className="rounded-2xl px-4 py-3 bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-xs font-bold">
           ✓ {toast}
+        </div>
+      )}
+
+      {/* Generated Payout Receipts Log */}
+      {showReceiptsLog && (
+        <div className="rounded-3xl p-5 sm:p-6 bg-[#0f1219] border border-emerald-500/30 space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <h2 className="text-base font-extrabold text-white">
+                Verified Payout Receipts ({receiptsLog.length})
+              </h2>
+              <p className="text-xs text-slate-400 mt-0.5">
+                Download PNG cards, copy public verification links, or share existing receipts to Inbox &amp; Community Arena.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => {
+                setReceiptInitialData({
+                  sessionId: currentSessionId || undefined,
+                  sessionName: activeSession?.name || "GuessWhat Live Session",
+                  payoutType: "session_winner",
+                });
+                setReceiptModalOpen(true);
+              }}
+              className="px-3.5 py-2 rounded-xl bg-emerald-500 text-slate-950 font-extrabold text-xs"
+            >
+              + New Receipt
+            </button>
+          </div>
+
+          {receiptsLog.length === 0 ? (
+            <p className="text-xs text-slate-400 py-4 text-center">
+              No payment receipts generated yet. Click &quot;Receipt&quot; next to any winner below or create a Custom Receipt.
+            </p>
+          ) : (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
+              {receiptsLog.slice(0, 20).map((r) => {
+                const publicUrl = `https://guesswhat-tan.vercel.app/receipt/${r.id}`;
+                return (
+                  <div
+                    key={r.id}
+                    className="rounded-2xl border border-white/10 bg-white/[0.02] p-4 flex flex-col justify-between gap-3"
+                  >
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <span className="font-bold text-sm text-white">@{r.username}</span>
+                          <span className="font-mono font-extrabold text-sm text-emerald-400">
+                            ₦{r.amount.toLocaleString()}
+                          </span>
+                          <span className="text-[10px] font-mono text-slate-400">
+                            {r.id}
+                          </span>
+                        </div>
+                        <p className="text-[11px] text-slate-400 mt-0.5 truncate">
+                          {r.position ? `${formatOrdinal(r.position)} Place · ` : ""}
+                          {r.sessionName} · {r.bankName} ({r.accountNumberMasked})
+                        </p>
+                        <div className="flex flex-wrap gap-1.5 mt-2 text-[10px] font-bold">
+                          {r.sharedToInbox && (
+                            <span className="px-2 py-0.5 rounded bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                              Inbox Sent
+                            </span>
+                          )}
+                          {r.sharedToCommunity && (
+                            <span className="px-2 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/30">
+                              Community Live
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      {r.imageUrl && (
+                        <a
+                          href={r.imageUrl}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="shrink-0"
+                        >
+                          <img
+                            src={r.imageUrl}
+                            alt={r.id}
+                            className="w-14 h-18 object-cover rounded-lg border border-white/15"
+                          />
+                        </a>
+                      )}
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-1.5 pt-2 border-t border-white/[0.06] text-[11px]">
+                      <a
+                        href={publicUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-sky-300 font-semibold"
+                      >
+                        Open Link ↗
+                      </a>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          navigator.clipboard?.writeText(publicUrl).catch(() => null);
+                          showToastMsg(`Copied public link for ${r.id}`);
+                        }}
+                        className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-slate-200 font-semibold"
+                      >
+                        Copy Link
+                      </button>
+                      {r.imageUrl && (
+                        <a
+                          href={r.imageUrl}
+                          download={`${r.id}.png`}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="px-2.5 py-1 rounded-lg bg-emerald-500/15 hover:bg-emerald-500/25 text-emerald-300 font-semibold"
+                        >
+                          PNG
+                        </a>
+                      )}
+                      {r.userId && !r.sharedToInbox && (
+                        <button
+                          type="button"
+                          disabled={receiptActionBusy === `${r.id}:share_inbox`}
+                          onClick={() => handleReceiptAction(r.id, "share_inbox")}
+                          className="px-2.5 py-1 rounded-lg bg-indigo-500/15 hover:bg-indigo-500/25 text-indigo-300 font-semibold"
+                        >
+                          Send Inbox
+                        </button>
+                      )}
+                      {!r.sharedToCommunity && (
+                        <button
+                          type="button"
+                          disabled={receiptActionBusy === `${r.id}:share_community`}
+                          onClick={() => handleReceiptAction(r.id, "share_community")}
+                          className="px-2.5 py-1 rounded-lg bg-amber-500/15 hover:bg-amber-500/25 text-amber-300 font-semibold"
+                        >
+                          Post Arena
+                        </button>
+                      )}
+                      <button
+                        type="button"
+                        disabled={receiptActionBusy === `${r.id}:delete`}
+                        onClick={() => handleReceiptAction(r.id, "delete")}
+                        className="ml-auto px-2.5 py-1 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-300 font-semibold"
+                      >
+                        Delete
+                      </button>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
 
@@ -950,26 +1188,55 @@ export default function AdminWinnersPage() {
                       </div>
                     </td>
                     <td className="px-4 py-3.5 text-right">
-                      <select
-                        value={w.paymentStatus}
-                        onChange={(e) =>
-                          handlePaymentStatusChange(
-                            w.userId,
-                            e.target.value as "Pending" | "Paid" | "Failed"
-                          )
-                        }
-                        className={`rounded-xl border px-3 py-1.5 text-xs font-extrabold ${
-                          w.paymentStatus === "Paid"
-                            ? "border-emerald-500/40 bg-emerald-500/20 text-emerald-300"
-                            : w.paymentStatus === "Failed"
-                            ? "border-rose-500/40 bg-rose-500/20 text-rose-300"
-                            : "border-amber-500/40 bg-amber-500/15 text-amber-300"
-                        }`}
-                      >
-                        <option value="Pending">Pending</option>
-                        <option value="Paid">Paid</option>
-                        <option value="Failed">Failed</option>
-                      </select>
+                      <div className="inline-flex items-center justify-end gap-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setReceiptInitialData({
+                              sessionId: currentSessionId || undefined,
+                              sessionName: activeSession?.name || "GuessWhat Live Session",
+                              payoutType: "session_winner",
+                              userId: w.userId,
+                              username: w.username,
+                              fullName: w.fullName,
+                              state: w.state,
+                              position: w.position,
+                              points: w.points,
+                              amount: w.prizeAllocated,
+                              bankName: w.bankName,
+                              accountNumber: w.accountNumber,
+                            });
+                            setReceiptModalOpen(true);
+                          }}
+                          className={`rounded-xl border px-3 py-1.5 text-xs font-bold transition-colors ${
+                            w.receiptId
+                              ? "border-emerald-500/40 bg-emerald-500/15 text-emerald-300 hover:bg-emerald-500/25"
+                              : "border-sky-500/40 bg-sky-500/15 text-sky-200 hover:bg-sky-500/25"
+                          }`}
+                        >
+                          {w.receiptId ? "✓ Receipt" : "Receipt"}
+                        </button>
+                        <select
+                          value={w.paymentStatus}
+                          onChange={(e) =>
+                            handlePaymentStatusChange(
+                              w.userId,
+                              e.target.value as "Pending" | "Paid" | "Failed"
+                            )
+                          }
+                          className={`rounded-xl border px-3 py-1.5 text-xs font-extrabold ${
+                            w.paymentStatus === "Paid"
+                              ? "border-emerald-500/40 bg-emerald-500/20 text-emerald-300"
+                              : w.paymentStatus === "Failed"
+                              ? "border-rose-500/40 bg-rose-500/20 text-rose-300"
+                              : "border-amber-500/40 bg-amber-500/15 text-amber-300"
+                          }`}
+                        >
+                          <option value="Pending">Pending</option>
+                          <option value="Paid">Paid</option>
+                          <option value="Failed">Failed</option>
+                        </select>
+                      </div>
                     </td>
                   </tr>
                 ))}
@@ -1049,6 +1316,16 @@ export default function AdminWinnersPage() {
           </div>
         </div>
       )}
+      {/* Shareable Payment Receipt Studio Modal */}
+      <ReceiptGeneratorModal
+        open={receiptModalOpen}
+        onClose={() => setReceiptModalOpen(false)}
+        initialData={receiptInitialData}
+        onCreated={async (r) => {
+          showToastMsg(`Verified receipt ${r.id} generated for @${r.username}!`);
+          await Promise.all([fetchReceipts(), fetchWinners()]);
+        }}
+      />
     </div>
   );
 }

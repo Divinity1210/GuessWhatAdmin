@@ -11,7 +11,23 @@ import {
   Check,
   Clock,
   HelpCircle,
+  BookOpen,
+  Plus,
+  Trash2,
 } from "lucide-react";
+
+type KnowledgeEntry = {
+  id: string;
+  title: string;
+  category: string;
+  keywords: string[];
+  sampleQuestions: string[];
+  answer: string;
+  ctaLabel?: string;
+  ctaHref?: string;
+  active: boolean;
+  updatedAt: string;
+};
 
 type TicketMessage = {
   id: number;
@@ -59,12 +75,13 @@ const QUICK_REPLIES = [
   },
 ];
 
-function isFeedbackCategory(cat: string | null): boolean {
-  const c = (cat || "").toLowerCase();
+function isFeedbackCategory(cat: string | null, subject?: string | null): boolean {
+  const c = `${cat || ""} ${subject || ""}`.toLowerCase();
   return c.includes("feedback") || c.includes("suggestion") || c.includes("gameplay");
 }
 
 export default function SupportPage() {
+  const [activeTab, setActiveTab] = useState<"tickets" | "knowledge">("tickets");
   const [tickets, setTickets] = useState<Ticket[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -76,6 +93,32 @@ export default function SupportPage() {
   const [replyBody, setReplyBody] = useState("");
   const [sending, setSending] = useState(false);
   const [toast, setToast] = useState("");
+
+  // AI FAQ Knowledge Bank state
+  const [kbEntries, setKbEntries] = useState<KnowledgeEntry[]>([]);
+  const [kbLoading, setKbLoading] = useState(false);
+  const [kbEditingId, setKbEditingId] = useState<string | null>(null);
+  const [kbTitle, setKbTitle] = useState("");
+  const [kbCategory, setKbCategory] = useState("Gameplay & Scoring");
+  const [kbKeywords, setKbKeywords] = useState("");
+  const [kbSamples, setKbSamples] = useState("");
+  const [kbAnswer, setKbAnswer] = useState("");
+  const [kbCtaLabel, setKbCtaLabel] = useState("");
+  const [kbCtaHref, setKbCtaHref] = useState("");
+  const [kbSaving, setKbSaving] = useState(false);
+
+  async function loadKnowledgeBank() {
+    setKbLoading(true);
+    try {
+      const res = await fetch("/api/admin/knowledge-bank", { cache: "no-store" });
+      if (res.ok) {
+        const data = await res.json();
+        setKbEntries((data.entries as KnowledgeEntry[]) ?? []);
+      }
+    } finally {
+      setKbLoading(false);
+    }
+  }
 
   async function loadTickets() {
     setLoading(true);
@@ -94,15 +137,82 @@ export default function SupportPage() {
 
   useEffect(() => {
     loadTickets();
+    loadKnowledgeBank();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  const resetKbForm = () => {
+    setKbEditingId(null);
+    setKbTitle("");
+    setKbCategory("Gameplay & Scoring");
+    setKbKeywords("");
+    setKbSamples("");
+    setKbAnswer("");
+    setKbCtaLabel("");
+    setKbCtaHref("");
+  };
+
+  async function handleSaveKbEntry(e: React.FormEvent) {
+    e.preventDefault();
+    if (!kbTitle.trim() || !kbAnswer.trim()) return;
+    setKbSaving(true);
+    try {
+      const method = kbEditingId ? "PATCH" : "POST";
+      const res = await fetch("/api/admin/knowledge-bank", {
+        method,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          id: kbEditingId || undefined,
+          title: kbTitle.trim(),
+          category: kbCategory.trim() || "General",
+          keywords: kbKeywords,
+          sampleQuestions: kbSamples,
+          answer: kbAnswer.trim(),
+          ctaLabel: kbCtaLabel.trim() || undefined,
+          ctaHref: kbCtaHref.trim() || undefined,
+          active: true,
+        }),
+      });
+      if (res.ok) {
+        setToast(
+          kbEditingId
+            ? "AI Knowledge Bank entry updated live."
+            : "New AI Knowledge Bank entry published live to Player FAQ Assistant!",
+        );
+        setTimeout(() => setToast(""), 4000);
+        resetKbForm();
+        await loadKnowledgeBank();
+      }
+    } finally {
+      setKbSaving(false);
+    }
+  }
+
+  async function handleToggleKbEntry(entry: KnowledgeEntry) {
+    await fetch("/api/admin/knowledge-bank", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: entry.id, active: !entry.active }),
+    });
+    await loadKnowledgeBank();
+  }
+
+  async function handleDeleteKbEntry(id: string) {
+    await fetch(`/api/admin/knowledge-bank?id=${encodeURIComponent(id)}`, {
+      method: "DELETE",
+    });
+    if (kbEditingId === id) resetKbForm();
+    setToast("Knowledge entry removed.");
+    setTimeout(() => setToast(""), 3000);
+    await loadKnowledgeBank();
+  }
 
   const filteredTickets = useMemo(() => {
     const q = search.trim().toLowerCase();
     return tickets.filter((t) => {
       if (statusFilter !== "all" && t.status !== statusFilter) return false;
-      if (categoryFilter === "feedback" && !isFeedbackCategory(t.category)) return false;
-      if (categoryFilter === "support" && isFeedbackCategory(t.category)) return false;
+      if (categoryFilter === "feedback" && !isFeedbackCategory(t.category, t.subject)) return false;
+      if (categoryFilter === "support" && isFeedbackCategory(t.category, t.subject)) return false;
 
       if (q) {
         const hay = [
@@ -170,7 +280,7 @@ export default function SupportPage() {
   const openCount = tickets.filter((t) => t.status === "open").length;
   const pendingCount = tickets.filter((t) => t.status === "pending").length;
   const resolvedCount = tickets.filter((t) => t.status === "resolved" || t.status === "closed").length;
-  const feedbackCount = tickets.filter((t) => isFeedbackCategory(t.category)).length;
+  const feedbackCount = tickets.filter((t) => isFeedbackCategory(t.category, t.subject)).length;
 
   return (
     <div className="space-y-6 max-w-7xl mx-auto">
@@ -182,12 +292,39 @@ export default function SupportPage() {
               Customer Support &amp; Feedback
             </h1>
             <span className="px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-500/15 text-amber-300 border border-amber-500/30">
-              Helpdesk &amp; Inbox Sync
+              Helpdesk &amp; AI FAQ
             </span>
           </div>
           <p className="text-slate-400 text-sm mt-1">
-            View player support requests, review gameplay feedback, respond to player complaints, and resolve issues in real time.
+            Review player support requests and feedback popup submissions, and manage the live AI FAQ Knowledge Bank.
           </p>
+        </div>
+
+        <div className="inline-flex items-center gap-1 rounded-2xl border border-white/10 bg-[#0f1219] p-1 self-start md:self-auto">
+          <button
+            type="button"
+            onClick={() => setActiveTab("tickets")}
+            className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 text-xs font-bold transition-colors ${
+              activeTab === "tickets"
+                ? "bg-amber-500 text-slate-950"
+                : "text-slate-300 hover:text-white"
+            }`}
+          >
+            <MessageSquare className="size-3.5" />
+            <span>Support &amp; Feedback ({tickets.length})</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab("knowledge")}
+            className={`inline-flex items-center gap-2 rounded-xl px-4 py-2 text-xs font-bold transition-colors ${
+              activeTab === "knowledge"
+                ? "bg-amber-500 text-slate-950"
+                : "text-slate-300 hover:text-white"
+            }`}
+          >
+            <BookOpen className="size-3.5" />
+            <span>AI FAQ Knowledge Bank ({kbEntries.length})</span>
+          </button>
         </div>
       </div>
 
@@ -201,6 +338,249 @@ export default function SupportPage() {
           <span>{toast}</span>
         </div>
       )}
+
+      {activeTab === "knowledge" ? (
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+          {/* Add / Edit Knowledge Entry Form */}
+          <form
+            onSubmit={handleSaveKbEntry}
+            className="lg:col-span-5 rounded-3xl bg-[#0f1219] border border-white/10 p-5 sm:p-6 space-y-4 self-start"
+          >
+            <div className="flex items-center justify-between gap-2 border-b border-white/10 pb-3">
+              <div>
+                <h2 className="text-base font-extrabold text-white">
+                  {kbEditingId ? "Edit Knowledge Entry" : "Add AI Knowledge Entry"}
+                </h2>
+                <p className="text-[11px] text-slate-400 mt-0.5">
+                  Published entries are used immediately by the Player App AI FAQ Assistant alongside the 24 built-in GuessWhat rules and live session stats.
+                </p>
+              </div>
+              {kbEditingId && (
+                <button
+                  type="button"
+                  onClick={resetKbForm}
+                  className="text-xs font-semibold text-slate-400 hover:text-white"
+                >
+                  Cancel
+                </button>
+              )}
+            </div>
+
+            <div>
+              <label className="block text-[11px] font-semibold text-slate-400 mb-1">
+                Topic Title *
+              </label>
+              <input
+                required
+                value={kbTitle}
+                onChange={(e) => setKbTitle(e.target.value)}
+                placeholder="e.g. Weekend Bonus Jackpot Rules"
+                className="w-full rounded-xl border border-white/10 bg-[#07090e] px-3.5 py-2 text-xs text-white"
+              />
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-400 mb-1">
+                  Category
+                </label>
+                <select
+                  value={kbCategory}
+                  onChange={(e) => setKbCategory(e.target.value)}
+                  className="w-full rounded-xl border border-white/10 bg-[#07090e] px-3 py-2 text-xs text-white"
+                >
+                  <option value="Gameplay & Scoring">Gameplay &amp; Scoring</option>
+                  <option value="Prizes & Payouts">Prizes &amp; Payouts</option>
+                  <option value="Referrals">Referrals</option>
+                  <option value="Community Arena">Community Arena</option>
+                  <option value="Account & Technical">Account &amp; Technical</option>
+                  <option value="Promotions & Events">Promotions &amp; Events</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-400 mb-1">
+                  Trigger Keywords (comma-separated)
+                </label>
+                <input
+                  value={kbKeywords}
+                  onChange={(e) => setKbKeywords(e.target.value)}
+                  placeholder="jackpot, weekend, bonus, promo"
+                  className="w-full rounded-xl border border-white/10 bg-[#07090e] px-3 py-2 text-xs text-white"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-[11px] font-semibold text-slate-400 mb-1">
+                Sample User Questions (one per line)
+              </label>
+              <textarea
+                rows={2}
+                value={kbSamples}
+                onChange={(e) => setKbSamples(e.target.value)}
+                placeholder={"How do I qualify for the weekend bonus?\nWhen are promo winners announced?"}
+                className="w-full rounded-xl border border-white/10 bg-[#07090e] px-3.5 py-2 text-xs text-white"
+              />
+            </div>
+
+            <div>
+              <label className="block text-[11px] font-semibold text-slate-400 mb-1">
+                Authoritative AI Answer *
+              </label>
+              <textarea
+                required
+                rows={4}
+                value={kbAnswer}
+                onChange={(e) => setKbAnswer(e.target.value)}
+                placeholder="Write the exact factual answer the AI Assistant should give players..."
+                className="w-full rounded-xl border border-white/10 bg-[#07090e] px-3.5 py-2 text-xs text-white"
+              />
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-400 mb-1">
+                  Optional Button Label
+                </label>
+                <input
+                  value={kbCtaLabel}
+                  onChange={(e) => setKbCtaLabel(e.target.value)}
+                  placeholder="e.g. Open Referrals"
+                  className="w-full rounded-xl border border-white/10 bg-[#07090e] px-3 py-2 text-xs text-white"
+                />
+              </div>
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-400 mb-1">
+                  Optional App Route
+                </label>
+                <input
+                  value={kbCtaHref}
+                  onChange={(e) => setKbCtaHref(e.target.value)}
+                  placeholder="e.g. /referrals or /play"
+                  className="w-full rounded-xl border border-white/10 bg-[#07090e] px-3 py-2 text-xs font-mono text-white"
+                />
+              </div>
+            </div>
+
+            <button
+              type="submit"
+              disabled={kbSaving}
+              className="w-full inline-flex items-center justify-center gap-2 py-3 rounded-xl bg-amber-500 hover:bg-amber-400 disabled:opacity-50 text-slate-950 font-extrabold text-xs transition-colors"
+            >
+              <Plus className="size-4" />
+              <span>
+                {kbSaving
+                  ? "Saving..."
+                  : kbEditingId
+                    ? "Save Updated Entry"
+                    : "Publish to AI Knowledge Bank"}
+              </span>
+            </button>
+          </form>
+
+          {/* Existing Custom Knowledge Entries */}
+          <div className="lg:col-span-7 rounded-3xl bg-[#0f1219] border border-white/10 p-5 sm:p-6 space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 pb-3">
+              <div>
+                <h2 className="text-base font-extrabold text-white">
+                  Custom Knowledge Bank Entries ({kbEntries.length})
+                </h2>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Built-in baseline covers 24 core topics (rules, 10-to-1 scoring, payouts, receipts, referrals, Arena, login). Add custom promo/policy entries here anytime.
+                </p>
+              </div>
+            </div>
+
+            {kbLoading ? (
+              <p className="text-xs text-slate-400 py-8 text-center">Loading knowledge bank...</p>
+            ) : kbEntries.length === 0 ? (
+              <div className="rounded-2xl border border-dashed border-white/10 p-8 text-center space-y-2">
+                <p className="text-sm font-bold text-white">No custom entries added yet</p>
+                <p className="text-xs text-slate-400 max-w-md mx-auto">
+                  The AI FAQ Assistant is already active with 24 built-in GuessWhat Knowledge Bank topics plus live session data. Add custom announcements, brand promos, or special payout rules on the left anytime.
+                </p>
+              </div>
+            ) : (
+              <div className="space-y-3">
+                {kbEntries.map((entry) => (
+                  <div
+                    key={entry.id}
+                    className={`rounded-2xl border p-4 space-y-2.5 ${
+                      entry.active
+                        ? "border-white/10 bg-white/[0.02]"
+                        : "border-white/5 bg-white/[0.01] opacity-60"
+                    }`}
+                  >
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div>
+                        <div className="flex flex-wrap items-center gap-2">
+                          <h3 className="text-sm font-bold text-white">{entry.title}</h3>
+                          <span className="px-2 py-0.5 rounded bg-amber-500/15 text-amber-300 text-[10px] font-bold">
+                            {entry.category}
+                          </span>
+                          <span
+                            className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                              entry.active
+                                ? "bg-emerald-500/15 text-emerald-300"
+                                : "bg-slate-700 text-slate-300"
+                            }`}
+                          >
+                            {entry.active ? "Active" : "Paused"}
+                          </span>
+                        </div>
+                        {entry.keywords.length > 0 && (
+                          <p className="text-[11px] text-slate-400 mt-1">
+                            Keywords: {entry.keywords.join(", ")}
+                          </p>
+                        )}
+                      </div>
+
+                      <div className="flex items-center gap-1.5">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setKbEditingId(entry.id);
+                            setKbTitle(entry.title);
+                            setKbCategory(entry.category);
+                            setKbKeywords(entry.keywords.join(", "));
+                            setKbSamples(entry.sampleQuestions.join("\n"));
+                            setKbAnswer(entry.answer);
+                            setKbCtaLabel(entry.ctaLabel || "");
+                            setKbCtaHref(entry.ctaHref || "");
+                          }}
+                          className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-[11px] font-semibold text-slate-200"
+                        >
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleToggleKbEntry(entry)}
+                          className="px-2.5 py-1 rounded-lg bg-white/5 hover:bg-white/10 text-[11px] font-semibold text-amber-300"
+                        >
+                          {entry.active ? "Pause" : "Enable"}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDeleteKbEntry(entry.id)}
+                          aria-label="Delete entry"
+                          className="p-1.5 rounded-lg bg-rose-500/10 hover:bg-rose-500/20 text-rose-300"
+                        >
+                          <Trash2 className="size-3.5" />
+                        </button>
+                      </div>
+                    </div>
+
+                    <p className="text-xs text-slate-300 leading-relaxed whitespace-pre-line">
+                      {entry.answer}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </div>
+      ) : (
+        <>
 
       {/* KPI Summary Cards */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-3.5">
@@ -325,7 +705,7 @@ export default function SupportPage() {
             <div className="divide-y divide-white/5 max-h-[620px] overflow-y-auto">
               {filteredTickets.map((t) => {
                 const isSelected = selectedTicket?.id === t.id;
-                const isFeedback = isFeedbackCategory(t.category);
+                const isFeedback = isFeedbackCategory(t.category, t.subject);
                 return (
                   <div
                     key={t.id}
@@ -551,6 +931,8 @@ export default function SupportPage() {
           )}
         </div>
       </div>
+        </>
+      )}
     </div>
   );
 }
