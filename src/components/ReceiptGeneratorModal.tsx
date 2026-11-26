@@ -42,7 +42,8 @@ export type ReceiptInitialData = {
   accountNumber?: string;
 };
 
-const PLAYER_APP_ORIGIN = "https://guesswhat-tan.vercel.app";
+const PLAYER_APP_ORIGIN =
+  process.env.NEXT_PUBLIC_PLAYER_APP_URL || "https://guesswhat9ja.com";
 
 export function maskAccountNumber(raw: string): string {
   const digits = String(raw || "").replace(/[^0-9]/g, "");

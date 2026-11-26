@@ -4,7 +4,7 @@ import { createServiceClient } from "@/lib/supabase";
 const RECEIPTS_SETTING_KEY = "payout_receipts";
 const BUCKET_NAME = "question-media";
 const PLAYER_APP_ORIGIN =
-  process.env.NEXT_PUBLIC_PLAYER_APP_URL || "https://guesswhat-tan.vercel.app";
+  process.env.NEXT_PUBLIC_PLAYER_APP_URL || "https://guesswhat9ja.com";
 
 export type PayoutReceipt = {
   id: string;

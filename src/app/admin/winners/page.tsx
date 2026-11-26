@@ -567,7 +567,7 @@ export default function AdminWinnersPage() {
           ) : (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3.5">
               {receiptsLog.slice(0, 20).map((r) => {
-                const publicUrl = `https://guesswhat-tan.vercel.app/receipt/${r.id}`;
+                const publicUrl = `${process.env.NEXT_PUBLIC_PLAYER_APP_URL || "https://guesswhat9ja.com"}/receipt/${r.id}`;
                 return (
                   <div
                     key={r.id}

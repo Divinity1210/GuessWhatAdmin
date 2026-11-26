@@ -116,7 +116,7 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
         <div className="p-4 border-t border-white/5 flex items-center justify-between text-xs text-slate-400">
           <span>admin@guesswhat.ng</span>
           <a
-            href="https://guesswhat-tan.vercel.app/dashboard"
+            href={`${process.env.NEXT_PUBLIC_PLAYER_APP_URL || "https://guesswhat9ja.com"}/dashboard`}
             target="_blank"
             rel="noopener noreferrer"
             className="text-amber-400 hover:underline font-semibold"
