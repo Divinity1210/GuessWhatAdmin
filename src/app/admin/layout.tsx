@@ -2,7 +2,14 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { ReactNode, useState } from "react";
+import { ReactNode, useEffect, useState } from "react";
+import { LogOut } from "lucide-react";
+
+type CurrentAdmin = {
+  email: string;
+  username: string;
+  role: string;
+};
 
 const navItems = [
   { label: "Dashboard", href: "/admin", category: "Core" },
@@ -23,6 +30,34 @@ const navItems = [
 export default function AdminLayout({ children }: { children: ReactNode }) {
   const pathname = usePathname();
   const [mobileOpen, setMobileOpen] = useState(false);
+  const [currentAdmin, setCurrentAdmin] = useState<CurrentAdmin | null>(null);
+  const [signingOut, setSigningOut] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    fetch("/api/auth/me", { cache: "no-store" })
+      .then((res) => (res.ok ? res.json() : null))
+      .then((data) => {
+        if (active && data?.user) {
+          setCurrentAdmin(data.user);
+        }
+      })
+      .catch(() => {
+        // Handled by middleware/API gate
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  async function handleSignOut() {
+    setSigningOut(true);
+    try {
+      await fetch("/api/auth/logout", { method: "POST" });
+    } finally {
+      window.location.href = "/login";
+    }
+  }
 
   return (
     <div className="flex h-screen bg-[#07090e] text-slate-100 overflow-hidden">
@@ -113,16 +148,40 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
           })}
         </nav>
 
-        <div className="p-4 border-t border-white/5 flex items-center justify-between text-xs text-slate-400">
-          <span>admin@guesswhat.ng</span>
-          <a
-            href={`${process.env.NEXT_PUBLIC_PLAYER_APP_URL || "https://guesswhat9ja.com"}/dashboard`}
-            target="_blank"
-            rel="noopener noreferrer"
-            className="text-amber-400 hover:underline font-semibold"
-          >
-            Player App ↗
-          </a>
+        <div className="p-4 border-t border-white/5 space-y-2.5 text-xs text-slate-400">
+          <div className="flex items-center justify-between gap-2">
+            <div className="min-w-0">
+              <p className="truncate font-medium text-slate-200">
+                {currentAdmin?.email || "admin@guesswhat.ng"}
+              </p>
+              <span className="inline-block mt-0.5 text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded bg-amber-500/15 text-amber-300 border border-amber-500/25">
+                {(currentAdmin?.role || "super_admin").replace(/_/g, " ")}
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={handleSignOut}
+              disabled={signingOut}
+              title="Sign Out"
+              className="inline-flex items-center gap-1 rounded-lg border border-white/10 bg-white/[0.04] px-2.5 py-1.5 text-[11px] font-semibold text-slate-300 hover:bg-red-500/15 hover:text-red-300 hover:border-red-500/30 transition-colors cursor-pointer shrink-0"
+            >
+              <LogOut className="size-3.5" />
+              <span>{signingOut ? "..." : "Out"}</span>
+            </button>
+          </div>
+          <div className="flex items-center justify-between pt-1">
+            <span className="text-[11px] text-slate-500">
+              @{currentAdmin?.username || "superadmin"}
+            </span>
+            <a
+              href={`${process.env.NEXT_PUBLIC_PLAYER_APP_URL || "https://guesswhat9ja.com"}/dashboard`}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-amber-400 hover:underline font-semibold"
+            >
+              Player App ↗
+            </a>
+          </div>
         </div>
       </aside>
 
