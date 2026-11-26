@@ -18,11 +18,10 @@ const ALLOWED_ADMIN_EMAILS = new Set([
 function buildPublicUrl(request: NextRequest, pathname: string, search?: string): URL {
   const forwardedHost = request.headers.get("x-forwarded-host")?.split(",")[0]?.trim();
   const forwardedProto = request.headers.get("x-forwarded-proto")?.split(",")[0]?.trim() || "https";
-  const url = new URL(pathname, request.url);
   if (forwardedHost) {
-    url.protocol = `${forwardedProto}:`;
-    url.host = forwardedHost;
+    return new URL(`${pathname}${search || ""}`, `${forwardedProto}://${forwardedHost}`);
   }
+  const url = new URL(pathname, request.url);
   url.search = search || "";
   return url;
 }
