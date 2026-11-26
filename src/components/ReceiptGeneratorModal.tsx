@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 
 export type PayoutReceiptRecord = {
   id: string;
@@ -108,6 +108,7 @@ function renderReceiptPngDataUrl(params: {
   transferRef?: string;
   note?: string;
   paidAt: string;
+  logoImage?: HTMLImageElement | null;
 }): string {
   const W = 1080;
   const H = 1350;
@@ -151,18 +152,26 @@ function renderReceiptPngDataUrl(params: {
   ctx.stroke();
 
   // Brand Emblem
-  drawRoundedRect(ctx, 96, 98, 76, 76, 20);
-  const logoGrad = ctx.createLinearGradient(96, 98, 172, 174);
-  logoGrad.addColorStop(0, "#FF2E00");
-  logoGrad.addColorStop(1, "#F7911B");
-  ctx.fillStyle = logoGrad;
-  ctx.fill();
+  if (
+    params.logoImage &&
+    params.logoImage.complete &&
+    params.logoImage.naturalWidth > 0
+  ) {
+    ctx.drawImage(params.logoImage, 92, 94, 84, 84);
+  } else {
+    drawRoundedRect(ctx, 96, 98, 76, 76, 20);
+    const logoGrad = ctx.createLinearGradient(96, 98, 172, 174);
+    logoGrad.addColorStop(0, "#FF2E00");
+    logoGrad.addColorStop(1, "#F7911B");
+    ctx.fillStyle = logoGrad;
+    ctx.fill();
 
-  ctx.fillStyle = "#FFFFFF";
-  ctx.font = `900 32px ${fontSans}`;
-  ctx.textAlign = "center";
-  ctx.textBaseline = "middle";
-  ctx.fillText("GW", 134, 138);
+    ctx.fillStyle = "#FFFFFF";
+    ctx.font = `900 32px ${fontSans}`;
+    ctx.textAlign = "center";
+    ctx.textBaseline = "middle";
+    ctx.fillText("GW", 134, 138);
+  }
 
   // Brand text
   ctx.textAlign = "left";
@@ -352,6 +361,14 @@ export function ReceiptGeneratorModal({
   const [createdShareUrl, setCreatedShareUrl] = useState("");
   const [localPngUrl, setLocalPngUrl] = useState("");
   const [copiedType, setCopiedType] = useState<"link" | "caption" | null>(null);
+  const logoImgRef = useRef<HTMLImageElement | null>(null);
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const img = new window.Image();
+    img.src = "/gw-mark.png";
+    logoImgRef.current = img;
+  }, []);
 
   useEffect(() => {
     if (!open) return;
@@ -405,6 +422,7 @@ export function ReceiptGeneratorModal({
       transferRef: transferRef.trim() || undefined,
       note: note.trim() || undefined,
       paidAt: new Date().toISOString(),
+      logoImage: logoImgRef.current,
     });
 
   const handleDownloadPng = (dataUrlOverride?: string, idOverride?: string) => {
@@ -873,10 +891,12 @@ export function ReceiptGeneratorModal({
               <div className="lg:col-span-5 flex flex-col justify-between gap-4">
                 <div className="rounded-2xl border border-white/15 bg-gradient-to-b from-[#131a2c] to-[#080c16] p-5 space-y-4 shadow-xl">
                   <div className="flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-2">
-                      <span className="grid size-8 place-items-center rounded-lg bg-gradient-to-br from-[#FF2E00] to-[#F7911B] text-xs font-black text-white">
-                        GW
-                      </span>
+                    <div className="flex items-center gap-2.5">
+                      <img
+                        src="/gw-mark.png"
+                        alt="GuessWhat"
+                        className="size-9 object-contain shrink-0"
+                      />
                       <div>
                         <p className="text-xs font-extrabold text-white leading-none">
                           GuessWhat

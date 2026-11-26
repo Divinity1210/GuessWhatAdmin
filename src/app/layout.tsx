@@ -5,6 +5,9 @@ import "./globals.css";
 const inter = Inter({ subsets: ["latin"], variable: "--font-inter" });
 
 export const metadata: Metadata = {
+  metadataBase: new URL(
+    process.env.NEXT_PUBLIC_ADMIN_APP_URL || "https://admin.guesswhat9ja.com",
+  ),
   title: "GuessWhat Admin",
   description: "Admin panel for GuessWhat game platform",
 };

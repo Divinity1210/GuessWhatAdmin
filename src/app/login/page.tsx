@@ -53,19 +53,15 @@ function AdminLoginForm() {
   return (
     <div className="min-h-screen bg-[#07090e] text-slate-100 flex items-center justify-center p-4">
       <div className="w-full max-w-md rounded-2xl border border-white/10 bg-[#0b0e17] p-7 sm:p-8 shadow-2xl">
-        <div className="flex items-center gap-3 mb-6">
-          <div className="size-10 rounded-xl bg-amber-500 flex items-center justify-center font-black text-slate-950 text-sm">
-            GW
-          </div>
-          <div>
-            <div className="flex items-center gap-2">
-              <h1 className="font-bold text-base text-white">GuessWhat</h1>
-              <span className="text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/30">
-                Admin
-              </span>
-            </div>
-            <p className="text-xs text-slate-400">Operations &amp; Data Control Center</p>
-          </div>
+        <div className="flex items-center justify-between gap-3 mb-6">
+          <img
+            src="/gw-logo.png"
+            alt="GuessWhat"
+            className="h-10 w-auto object-contain"
+          />
+          <span className="text-[10px] font-semibold uppercase tracking-wider px-2.5 py-1 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/30">
+            Admin Portal
+          </span>
         </div>
 
         <div className="mb-6">

@@ -75,20 +75,16 @@ export default function AdminLayout({ children }: { children: ReactNode }) {
           mobileOpen ? "translate-x-0" : "-translate-x-full"
         }`}
       >
-        <div className="p-6 border-b border-white/5 flex items-center justify-between">
-          <Link href="/admin" className="flex items-center gap-3">
-            <div className="size-9 rounded-xl bg-amber-500 flex items-center justify-center font-black text-slate-950 text-sm">
-              GW
-            </div>
-            <div>
-              <h1 className="font-bold text-sm tracking-tight text-white flex items-center gap-2">
-                GuessWhat
-                <span className="text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/30">
-                  Admin
-                </span>
-              </h1>
-              <p className="text-[11px] text-slate-400">Operations &amp; Data</p>
-            </div>
+        <div className="p-5 border-b border-white/5 flex items-center justify-between gap-2">
+          <Link href="/admin" className="flex items-center gap-2.5 min-w-0">
+            <img
+              src="/gw-logo.png"
+              alt="GuessWhat"
+              className="h-8 w-auto object-contain shrink-0"
+            />
+            <span className="text-[10px] font-semibold uppercase tracking-wider px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-300 border border-amber-500/30 shrink-0">
+              Admin
+            </span>
           </Link>
           <button
             type="button"
